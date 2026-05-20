@@ -1,16 +1,71 @@
-# This is a sample Python script.
+"""
+Главный файл приложения Telegram бота для дневника тренировок.
+Инициализирует базу данных, настраивает логирование и запускает поллинг.
+"""
 
-# Press Shift+F10 to execute it or replace it with your code.
-# Press Double Shift to search everywhere for classes, files, tool windows, actions, and settings.
+import asyncio
+import logging
+
+from aiogram import Bot, Dispatcher
+from aiogram.fsm.storage.memory import MemoryStorage
+
+from config.config import BOT_TOKEN
+from database.connection import init_db
+from handlers.common import router as common_router
+from handlers.workout import router as workout_router
+
+# Настраиваем базовое логирование
+# level=logging.INFO - показывает информационные сообщения и выше (WARNING, ERROR)
+# format - формат вывода логов с временем, уровнем и сообщением
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+
+# Получаем logger для текущего модуля
+logger = logging.getLogger(__name__)
 
 
-def print_hi(name):
-    # Use a breakpoint in the code line below to debug your script.
-    print(f'Hi, {name}')  # Press Ctrl+F8 to toggle the breakpoint.
+async def main() -> None:
+    """
+    Главная асинхронная функция приложения.
+    
+    Инициализирует базу данных, создает бота и диспетчер,
+    регистрирует роутеры и запускает поллинг.
+    """
+    # Инициализируем базу данных: создаем все таблицы согласно моделям
+    logger.info("Инициализация базы данных...")
+    init_db()
+    logger.info("База данных успешно инициализирована.")
+    
+    # Создаем объект бота с токеном из конфигурации
+    # parse_mode="HTML" устанавливает режим парсинга по умолчанию для всех сообщений
+    bot = Bot(token=BOT_TOKEN, parse_mode="HTML")
+    
+    # Создаем диспетчер с хранилищем состояний FSM в памяти
+    # MemoryStorage подходит для простых случаев; для production лучше использовать Redis
+    storage = MemoryStorage()
+    dp = Dispatcher(storage=storage)
+    
+    # Подключаем роутеры к диспетчеру
+    # Роутер common содержит обработчики команд /start и /help
+    dp.include_router(common_router)
+    # Роутер workout содержит обработчики для записи тренировок
+    dp.include_router(workout_router)
+    
+    # Логгируем успешный старт
+    logger.info("Бот запущен и готов к работе!")
+    
+    # Запускаем поллинг (опрос сервера Telegram на наличие новых сообщений)
+    # allowed_updates=[] означает, что бот будет получать все типы обновлений
+    await dp.start_polling(bot, allowed_updates=[])
 
 
-# Press the green button in the gutter to run the script.
-if __name__ == '__main__':
-    print_hi('PyCharm')
-
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/
+if __name__ == "__main__":
+    # Запускаем главную асинхронную функцию
+    # asyncio.run() создает event loop и выполняет main() до завершения
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        # Обрабатываем прерывание работы (Ctrl+C)
+        logger.info("Бот остановлен пользователем.")
