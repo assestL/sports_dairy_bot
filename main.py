@@ -7,6 +7,8 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from config.config import BOT_TOKEN
@@ -39,8 +41,9 @@ async def main() -> None:
     logger.info("База данных успешно инициализирована.")
     
     # Создаем объект бота с токеном из конфигурации
-    # parse_mode="HTML" устанавливает режим парсинга по умолчанию для всех сообщений
-    bot = Bot(token=BOT_TOKEN, parse_mode="HTML")
+    # default=DefaultBotProperties(parse_mode=ParseMode.HTML) устанавливает режим парсинга по умолчанию
+    # Это новый способ установки parse_mode в aiogram 3.7.0+
+    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     
     # Создаем диспетчер с хранилищем состояний FSM в памяти
     # MemoryStorage подходит для простых случаев; для production лучше использовать Redis
