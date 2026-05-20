@@ -1,6 +1,8 @@
 """
 Модуль для подключения к базе данных и создания сессий SQLAlchemy.
 Использует переменные окружения для конфигурации.
+Поддерживает как синхронные (psycopg2), так и асинхронные (asyncpg) драйверы.
+Для синхронного режима убедитесь, что DATABASE_URL использует postgresql:// или postgresql+psycopg2://
 """
 
 import os
@@ -23,9 +25,27 @@ def get_database_url() -> str:
     return database_url
 
 
-# Создание движка SQLAlchemy
+def get_sync_database_url() -> str:
+    """
+    Преобразует URL базы данных в синхронный формат.
+    Если используется asyncpg, заменяет на psycopg2.
+    """
+    url = get_database_url()
+    # Заменяем асинхронный драйвер на синхронный, если он указан
+    if url.startswith("postgresql+asyncpg://"):
+        url = url.replace("postgresql+asyncpg://", "postgresql+psycopg2://", 1)
+    elif url.startswith("asyncpg://"):
+        url = url.replace("asyncpg://", "postgresql+psycopg2://", 1)
+    elif url.startswith("postgresql://"):
+        # Явно указываем psycopg2 для ясности
+        url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
+    return url
+
+
+# Создание синхронного движка SQLAlchemy
+# Используем psycopg2 для синхронной работы
 engine = create_engine(
-    get_database_url(),
+    get_sync_database_url(),
     echo=False,  # Установите True для отладки SQL-запросов
     pool_pre_ping=True,  # Проверка соединения перед использованием
 )
