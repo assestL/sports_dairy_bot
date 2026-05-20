@@ -1,5 +1,34 @@
+```
+# Environment
 .env
+.env.local
+.env.*
+
+# Dependencies
+.venv/
+venv/
 __pycache__/
 *.pyc
-venv/
+*.pyo
+*.pyd
+
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+
+# Editors
+.vscode/
 .idea/
+
+# Build artifacts
+dist/
+build/
+target/
+*.egg-info/
+.coverage
+coverage/
+htmlcov/
+.mypy_cache/
+.pytest_cache/
+```
