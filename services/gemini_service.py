@@ -8,7 +8,7 @@ from typing import List, Optional, Union
 from datetime import date
 
 from google import genai
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class Exercise(BaseModel):
@@ -18,6 +18,12 @@ class Exercise(BaseModel):
     weight: float = Field(description="Вес снаряда в кг")
     sets: int = Field(description="Количество подходов")
     reps: int = Field(description="Количество повторений в подходе")
+
+    @field_validator('name')
+    @classmethod
+    def normalize_exercise_name(cls, v: str) -> str:
+        """Приводит название упражнения к нижнему регистру для единообразия в БД."""
+        return v.strip().lower()
 
 
 class WorkoutSession(BaseModel):
@@ -40,6 +46,12 @@ class AnalyticsIntent(BaseModel):
     
     exercise_name: str = Field(description="Название упражнения для анализа")
     period_days: int = Field(default=30, description="Количество дней для анализа")
+
+    @field_validator('exercise_name')
+    @classmethod
+    def normalize_exercise_name(cls, v: str) -> str:
+        """Приводит название упражнения к нижнему регистру для единообразия поиска в БД."""
+        return v.strip().lower()
 
 
 class UserIntent(BaseModel):

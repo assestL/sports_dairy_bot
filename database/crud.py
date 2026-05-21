@@ -85,7 +85,7 @@ def save_workout(telegram_id: int, parsed_data: WorkoutParseResult) -> WorkoutSe
             for exercise in session_data.exercises:
                 detail = WorkoutDetail(
                     session_id=session.session_id,
-                    exercise_name=exercise.name,
+                    exercise_name=exercise.name.lower().strip(),  # Нормализуем к нижнему регистру
                     weight=exercise.weight,
                     sets_count=exercise.sets,
                     reps_count=exercise.reps
