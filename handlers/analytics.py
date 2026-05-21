@@ -3,7 +3,8 @@
 Содержит команды для просмотра прогресса и списка упражнений.
 """
 
-from aiogram import Router, types
+from aiogram import Router, types, F
+from aiogram.filters import Command
 from sqlalchemy import distinct, select
 
 from database.connection import get_session_sync
@@ -14,7 +15,7 @@ from services.gemini_service import extract_analytics_intent
 router = Router()
 
 
-@router.message(lambda msg: msg.text == "/exercises")
+@router.message(Command("exercises"))
 async def cmd_exercises(message: types.Message):
     """
     Обработчик команды /exercises.
@@ -52,7 +53,7 @@ async def cmd_exercises(message: types.Message):
         session.close()
 
 
-@router.message(lambda msg: msg.text and (msg.text.startswith("Покажи") or msg.text.startswith("Прогресс")))
+@router.message(F.text.regexp(r"^(Покажи|Прогресс|Как там|График|Статистика)"))
 async def handle_analytics_request(message: types.Message):
     """
     Обработчик текстовых запросов аналитики.
