@@ -29,6 +29,13 @@ class WorkoutParseResult(BaseModel):
     recommendation: str = Field(description="Краткая рекомендация от AI тренера")
 
 
+class AnalyticsIntent(BaseModel):
+    """Модель намерения пользователя для аналитики."""
+    
+    exercise_name: str = Field(description="Название упражнения для анализа")
+    period_days: int = Field(default=30, description="Количество дней для анализа")
+
+
 # Инициализация клиента Gemini
 _gemini_client: Optional[genai.Client] = None
 
@@ -92,5 +99,51 @@ async def parse_workout_text(text: str) -> WorkoutParseResult:
     
     # Парсим ответ через Pydantic модель для дополнительной валидации
     result = WorkoutParseResult.model_validate_json(response.text)
+    
+    return result
+
+
+async def extract_analytics_intent(text: str) -> AnalyticsIntent:
+    """
+    Извлекает намерение пользователя для аналитики из текстового запроса.
+    
+    Понимает запросы вроде:
+    - "Покажи мой прогресс в жиме лежа за 2 месяца"
+    - "Как там мои приседания?"
+    - "Прогресс становой тяги за неделю"
+    
+    Args:
+        text: Текстовый запрос пользователя
+        
+    Returns:
+        AnalyticsIntent: Структурированное намерение с названием упражнения и периодом
+    """
+    client = get_gemini_client()
+    
+    prompt = """
+Ты — помощник для извлечения намерений пользователя в спортивном дневнике.
+Пользователь запрашивает аналитику по своим тренировкам.
+Твоя задача:
+1. Определить название упражнения, о котором спрашивает пользователь
+2. Определить период анализа (если указан). Поддерживаются форматы: "за N дней/недель/месяцев"
+   - Если период не указан, используй значение по умолчанию 30 дней
+   - 1 неделя = 7 дней, 1 месяц = 30 дней
+   
+Отвечай ТОЛЬКО в формате JSON согласно предоставленной схеме. Не добавляй никаких пояснений вне JSON.
+
+Запрос пользователя:
+{text}
+""".format(text=text)
+    
+    response = client.models.generate_content(
+        model="gemini-2.0-flash",
+        contents=prompt,
+        config={
+            "response_mime_type": "application/json",
+            "response_schema": AnalyticsIntent,
+        },
+    )
+    
+    result = AnalyticsIntent.model_validate_json(response.text)
     
     return result
