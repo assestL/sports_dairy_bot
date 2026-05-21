@@ -52,12 +52,13 @@ async def main() -> None:
     dp = Dispatcher(storage=storage)
     
     # Подключаем роутеры к диспетчеру
-    # Роутер common содержит обработчики команд /start и /help
-    dp.include_router(common_router)
-    # Роутер workout содержит обработчики для записи тренировок
-    dp.include_router(workout_router)
-    # Роутер analytics содержит обработчики для аналитики и графиков
+    # Роутер analytics содержит обработчики для команд /start, /help, /exercises и аналитики
+    # ВАЖНО: analytics_router должен быть подключен ПЕРВЫМ, чтобы команды обрабатывались до workout_router
     dp.include_router(analytics_router)
+    # Роутер common содержит обработчики команд /start и /help (дублируются в analytics)
+    dp.include_router(common_router)
+    # Роутер workout содержит обработчики для записи тренировок (только обычные текстовые сообщения)
+    dp.include_router(workout_router)
     
     # Логгируем успешный старт
     logger.info("Бот запущен и готов к работе!")
