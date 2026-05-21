@@ -15,6 +15,7 @@ from config.config import BOT_TOKEN
 from database.connection import init_db
 from handlers.common import router as common_router
 from handlers.workout import router as workout_router
+from handlers.analytics import router as analytics_router
 
 # Настраиваем базовое логирование
 # level=logging.INFO - показывает информационные сообщения и выше (WARNING, ERROR)
@@ -55,6 +56,8 @@ async def main() -> None:
     dp.include_router(common_router)
     # Роутер workout содержит обработчики для записи тренировок
     dp.include_router(workout_router)
+    # Роутер analytics содержит обработчики для аналитики и графиков
+    dp.include_router(analytics_router)
     
     # Логгируем успешный старт
     logger.info("Бот запущен и готов к работе!")
