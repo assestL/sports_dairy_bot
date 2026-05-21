@@ -1,118 +1,179 @@
 """
-Модуль CRUD операций для работы с базой данных.
-Содержит функции для создания, чтения, обновления и удаления записей.
-Использует синхронные вызовы SQLAlchemy, завернутые в безопасные функции.
+CRUD операции.
+Полностью совместимы с вашей PostgreSQL БД.
 """
 
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy.orm import Session
-
 from database.connection import get_session_sync
-from database.models import User, WorkoutSession, WorkoutDetail, AIRecommendation
+from database.models import (
+    User,
+    WorkoutSession,
+    WorkoutDetail,
+    AIRecommendation,
+)
+
 from services.gemini_service import WorkoutParseResult
 
 
-def get_or_create_user(telegram_id: int, username: Optional[str] = None) -> User:
-    """
-    Проверяет наличие пользователя в базе данных по telegram_id.
-    Если пользователь не найден — создает нового.
-    
-    Args:
-        telegram_id: Telegram ID пользователя
-        username: Имя пользователя в Telegram (может быть None)
-        
-    Returns:
-        Объект пользователя (существующий или newly created)
-    """
+def get_or_create_user(
+    telegram_id: int,
+    username: Optional[str] = None
+) -> User:
+
     db = get_session_sync()
+
     try:
-        # Пытаемся найти существующего пользователя
-        user = db.query(User).filter(User.telegram_id == telegram_id).first()
-        
+
+        user = (
+            db.query(User)
+            .filter(User.telegram_id == telegram_id)
+            .first()
+        )
+
         if user is None:
-            # Создаем нового пользователя
+
             user = User(
-                telegram_id=telegram_id,
+                telegram_id=int(telegram_id),
                 username=username,
                 created_at=datetime.utcnow()
             )
+
             db.add(user)
+
             db.commit()
+
             db.refresh(user)
-        
+
+            print(
+                f"[DB] CREATED USER {telegram_id}"
+            )
+
         return user
+
+    except Exception as e:
+
+        db.rollback()
+
+        print(
+            f"[DB ERROR] {str(e)}"
+        )
+
+        raise e
+
     finally:
+
         db.close()
 
 
-def save_workout(telegram_id: int, parsed_data: WorkoutParseResult) -> WorkoutSession:
-    """
-    Сохраняет тренировку в базу данных в рамках одной транзакции.
-    Создает сессию тренировки, все упражнения и AI-рекомендацию.
-    
-    Args:
-        telegram_id: Telegram ID пользователя
-        parsed_data: Распарсенные данные тренировки из Gemini API (содержит список sessions)
-        
-    Returns:
-        Объект сохраненной сессии тренировки (последней из списка)
-    """
+def save_workout(
+    telegram_id: int,
+    parsed_data: WorkoutParseResult
+) -> WorkoutSession:
+
     db = get_session_sync()
+
     try:
+
+        # ГАРАНТИЯ существования пользователя
+        user = (
+            db.query(User)
+            .filter(User.telegram_id == telegram_id)
+            .first()
+        )
+
+        if user is None:
+
+            user = User(
+                telegram_id=telegram_id,
+                username=None,
+                created_at=datetime.utcnow()
+            )
+
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+
         last_session = None
-        
-        # Обрабатываем каждую сессию из списка
+
         for session_data in parsed_data.sessions:
-            # Преобразуем дату тренировки в формат date, если она строка
+
             workout_date = session_data.date
+
             if isinstance(workout_date, str):
+
                 from datetime import date
-                workout_date = date.fromisoformat(workout_date)
-            
-            # Создаем сессию тренировки
-            session = WorkoutSession(
+
+                workout_date = date.fromisoformat(
+                    workout_date
+                )
+
+            workout_session = WorkoutSession(
                 telegram_id=telegram_id,
                 session_date=workout_date,
                 user_notes=session_data.wellness_notes,
                 created_at=datetime.utcnow()
             )
-            db.add(session)
-            db.flush()  # Получаем session_id перед добавлением деталей
-            
-            # Добавляем детали упражнений для этой сессии
+
+            db.add(workout_session)
+
+            db.flush()
+
+            # СОХРАНЯЕМ ИМЕННО В ВАШУ СХЕМУ БД
             for exercise in session_data.exercises:
+
+                sets_count = len(exercise.reps)
+
+                # если reps = [10,10,10]
+                # сохраняем:
+                # sets_count = 3
+                # reps_count = 10
+
+                reps_count = max(exercise.reps)
+
                 detail = WorkoutDetail(
-                    session_id=session.session_id,
-                    exercise_name=exercise.name.lower().strip(),  # Нормализуем к нижнему регистру
+                    session_id=workout_session.session_id,
+
+                    exercise_name=(
+                        exercise.name
+                        .lower()
+                        .strip()
+                        .replace("ё", "е")
+                    ),
+
                     weight=exercise.weight,
-                    sets_count=exercise.sets,
-                    reps_count=exercise.reps
+
+                    sets_count=sets_count,
+
+                    reps_count=reps_count
                 )
+
                 db.add(detail)
-            
-            # Добавляем AI-рекомендацию для этой сессии
+
             if session_data.recommendation:
+
                 recommendation = AIRecommendation(
-                    session_id=session.session_id,
+                    session_id=workout_session.session_id,
                     advice_text=session_data.recommendation,
                     is_read=False
                 )
+
                 db.add(recommendation)
-            
-            last_session = session
-        
-        # Фиксируем все изменения в одной транзакции
+
+            last_session = workout_session
+
         db.commit()
-        
-        # Возвращаем последнюю сохраненную сессию
+
         if last_session:
             db.refresh(last_session)
-        
+
         return last_session
+
     except Exception as e:
-        db.rollback()  # Откатываем транзакцию при ошибке
+
+        db.rollback()
         raise e
+
     finally:
         db.close()

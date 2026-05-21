@@ -13,22 +13,38 @@ from pydantic import BaseModel, Field, field_validator
 
 class Exercise(BaseModel):
     """Модель упражнения в тренировке."""
-    
-    name: str = Field(description="Название упражнения")
-    weight: float = Field(description="Вес снаряда в кг")
-    sets: int = Field(description="Количество подходов")
-    reps: int = Field(description="Количество повторений в подходе")
+
+    name: str = Field(
+        description="Название упражнения"
+    )
+
+    weight: float = Field(
+        description="Вес снаряда в кг"
+    )
+
+    reps: List[int] = Field(
+        description=(
+            "СПИСОК повторений для КАЖДОГО подхода.\n"
+            "Например:\n"
+            "[20,20,20,20,20]\n"
+            "или:\n"
+            "[20,20,20,30]"
+        )
+    )
 
     @field_validator('name')
     @classmethod
     def normalize_exercise_name(cls, v: str) -> str:
-        """Приводит название упражнения к нижнему регистру для единообразия в БД."""
-        return v.strip().lower()
+        return (
+            v.strip()
+            .lower()
+            .replace("ё", "е")
+        )
 
 
 class WorkoutSession(BaseModel):
     """Модель одной тренировочной сессии (один день)."""
-    
+
     date: str = Field(description="Дата тренировки в формате YYYY-MM-DD")
     exercises: List[Exercise] = Field(description="Список выполненных упражнений в этот день")
     wellness_notes: Optional[str] = Field(default=None, description="Заметки по самочувствию пользователя")
@@ -37,13 +53,13 @@ class WorkoutSession(BaseModel):
 
 class WorkoutParseResult(BaseModel):
     """Результат парсинга текста тренировок через Gemini."""
-    
+
     sessions: List[WorkoutSession] = Field(description="Список тренировочных сессий (по одной на каждый день)")
 
 
 class AnalyticsIntent(BaseModel):
     """Модель намерения пользователя для аналитики."""
-    
+
     exercise_name: str = Field(description="Название упражнения для анализа")
     period_days: int = Field(default=30, description="Количество дней для анализа")
 
@@ -56,7 +72,7 @@ class AnalyticsIntent(BaseModel):
 
 class UserIntent(BaseModel):
     """Модель для определения общего намерения пользователя."""
-    
+
     intent_type: str = Field(description="Тип намерения: 'workout' (запись тренировки), 'analytics' (аналитика/прогресс), 'other' (другое)")
     workout_data: Optional[WorkoutParseResult] = Field(default=None, description="Данные тренировки, если intent_type='workout'")
     analytics_data: Optional[AnalyticsIntent] = Field(default=None, description="Данные аналитики, если intent_type='analytics'")
@@ -69,7 +85,7 @@ _gemini_client: Optional[genai.Client] = None
 def get_gemini_client() -> genai.Client:
     """Получает клиент Gemini API, используя ключ из переменных окружения."""
     global _gemini_client
-    
+
     if _gemini_client is None:
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
@@ -78,90 +94,141 @@ def get_gemini_client() -> genai.Client:
                 "Проверьте файл .env или настройки окружения."
             )
         _gemini_client = genai.Client(api_key=api_key)
-    
+
     return _gemini_client
 
 
 async def parse_workout_text(text: str, telegram_date: str = None) -> WorkoutParseResult:
     """
     Отправляет текст пользователя в Gemini API для парсинга структуры тренировок.
-    
+
     Использует структурированный вывод (Response Schema) для гарантированного
     возврата валидного JSON согласно Pydantic схеме.
-    
+
     Поддерживает описание нескольких тренировок в одном сообщении.
     ИИ автоматически распознает даты и создаст отдельные сессии для каждой тренировки.
-    
+
     Args:
         text: Текст описания тренировки(ок) от пользователя
         telegram_date: Дата сообщения Telegram в формате YYYY-MM-DD (используется по умолчанию, если в тексте не указана дата)
-        
+
     Returns:
         WorkoutParseResult: Список тренировочных сессий, сгруппированных по датам
     """
     client = get_gemini_client()
-    
+
     # Формируем промпт для модели
-    prompt = """
-Ты — помощник для анализа спортивных тренировок. 
-Пользователь отправит тебе описание своих тренировок в свободной форме.
-В одном сообщении может быть описание НЕСКОЛЬКИХ тренировок за разные дни.
+    prompt = f"""
+    Проанализируй текст тренировки пользователя.
 
-Твоя задача:
-1. Распознать ВСЕ упомянутые даты тренировок из текста (например: "в прошлый понедельник", "во вторник", "5 мая")
-2. Для каждой найденной даты создать ОТДЕЛЬНУЮ сессию (WorkoutSession) с упражнениями, выполненными именно в этот день
-3. Если дата не указана для конкретного упражнения, используй дату из параметра telegram_date ({telegram_date})
-4. Группируй упражнения строго по датам - упражнения за разные дни должны быть в разных сессиях
-5. Выделить заметки пользователя о самочувствии (если есть) для каждой сессии
-6. Сформулировать краткую рекомендацию для каждой сессии
+    Верни JSON строго по схеме.
 
-ВАЖНО: 
-- Создавай отдельную сессию (WorkoutSession) для КАЖДОЙ уникальной даты, найденной в тексте
-- Не объединяй упражнения из разных дней в одну сессию
-- Если в тексте сказано "в понедельник делал отжимания, а во вторник приседания" - должно быть 2 сессии
+    ВАЖНО:
 
-Отвечай ТОЛЬКО в формате JSON согласно предоставленной схеме. Не добавляй никаких пояснений вне JSON.
+    1. Создавай отдельную тренировочную сессию для каждой даты.
 
-Дата сообщения Telegram (используй как дату тренировки по умолчанию): {telegram_date}
+    2. Никогда не создавай даты в будущем.
 
-Текст тренировки пользователя:
-{text}
+    3. Все даты должны быть <= telegram_date.
+
+    4. Если пользователь пишет:
+    - вчера
+    - позавчера
+    - в прошлый понедельник
+    - на прошлой неделе
+
+    то вычисляй дату относительно telegram_date.
+
+    5. Для КАЖДОГО подхода нужно создать отдельное значение в массиве reps.
+
+    ПРИМЕРЫ:
+
+    Пользователь:
+    "5 подходов по 20 отжиманий"
+
+    Правильно:
+
+    "reps": [20,20,20,20,20]
+
+    НЕПРАВИЛЬНО:
+
+    "reps": [20]
+
+    ----------------------------------------
+
+    Пользователь:
+    "3 подхода по 20 и 1 подход 30"
+
+    Правильно:
+
+    "reps": [20,20,20,30]
+
+    ----------------------------------------
+
+    Пользователь:
+    "жим лежа 4x10 80кг"
+
+    Правильно:
+
+    "reps": [10,10,10,10]
+
+    weight: 80
+
+    ----------------------------------------
+
+    Каждый подход ОБЯЗАТЕЛЬНО должен быть отдельным элементом массива reps.
+
+    НЕ сокращай подходы.
+
+    НЕ используй:
+    - sets
+    - sets_count
+
+    Только массив reps.
+
+    Отвечай ТОЛЬКО JSON.
+
+    Дата сообщения Telegram:
+    {telegram_date}
+
+    Текст пользователя:
+    {text}
 """.format(text=text, telegram_date=telegram_date or "сегодня")
-    
+
     # Используем генерацию с Response Schema для строгой валидации
     response = client.models.generate_content(
-        model="gemini-2.0-flash",  # Современная быстрая модель
+        model="gemini-2.5-flash",  # Современная быстрая модель
         contents=prompt,
         config={
             "response_mime_type": "application/json",
             "response_schema": WorkoutParseResult,
         },
     )
-    
+
     # Парсим ответ через Pydantic модель для дополнительной валидации
     result = WorkoutParseResult.model_validate_json(response.text)
-    
+
     return result
 
 
 async def determine_user_intent(text: str, telegram_date: str = None) -> UserIntent:
     """
     Определяет общее намерение пользователя: запись тренировки, аналитика или другое.
-    
+
     Эта функция анализирует текст и решает:
     - Это описание тренировки (workout)
     - Запрос аналитики/прогресса (analytics)
     - Что-то другое (other)
-    
+
     Args:
         text: Текст сообщения от пользователя
         telegram_date: Дата сообщения Telegram в формате YYYY-MM-DD
-        
+
     Returns:
         UserIntent: Структурированное намерение с данными тренировки или аналитики
     """
     client = get_gemini_client()
-    
+
     prompt = """
 Ты — помощник для определения намерений пользователя в спортивном дневнике.
 Пользователь может отправить:
@@ -180,8 +247,14 @@ async def determine_user_intent(text: str, telegram_date: str = None) -> UserInt
    - Распознать все упражнения с параметрами: название, вес, подходы, повторения
    - Выделить заметки о самочувствии
    - Сформулировать рекомендацию
-   - ВАЖНО: Если описаны тренировки за несколько дней, объедини ВСЕ упражнения в один список
-
+ВАЖНО:
+- Никогда не создавай даты в будущем
+- Все даты должны быть <= telegram_date
+- "вчера", "в прошлый понедельник" и подобные фразы
+  вычисляй относительно telegram_date
+- Если описаны тренировки за несколько дней —
+  создай отдельную session для каждого дня
+  
 3. Если intent_type='analytics':
    - Определить название упражнения
    - Определить период анализа (по умолчанию 30 дней)
@@ -196,38 +269,38 @@ async def determine_user_intent(text: str, telegram_date: str = None) -> UserInt
 Сообщение пользователя:
 {text}
 """.format(text=text, telegram_date=telegram_date or "сегодня")
-    
+
     response = client.models.generate_content(
-        model="gemini-2.0-flash",
+        model="gemini-2.5-flash",
         contents=prompt,
         config={
             "response_mime_type": "application/json",
             "response_schema": UserIntent,
         },
     )
-    
+
     result = UserIntent.model_validate_json(response.text)
-    
+
     return result
 
 
 async def extract_analytics_intent(text: str) -> AnalyticsIntent:
     """
     Извлекает намерение пользователя для аналитики из текстового запроса.
-    
+
     Понимает запросы вроде:
     - "Покажи мой прогресс в жиме лежа за 2 месяца"
     - "Как там мои приседания?"
     - "Прогресс становой тяги за неделю"
-    
+
     Args:
         text: Текстовый запрос пользователя
-        
+
     Returns:
         AnalyticsIntent: Структурированное намерение с названием упражнения и периодом
     """
     client = get_gemini_client()
-    
+
     prompt = """
 Ты — помощник для извлечения намерений пользователя в спортивном дневнике.
 Пользователь запрашивает аналитику по своим тренировкам.
@@ -242,16 +315,16 @@ async def extract_analytics_intent(text: str) -> AnalyticsIntent:
 Запрос пользователя:
 {text}
 """.format(text=text)
-    
+
     response = client.models.generate_content(
-        model="gemini-2.0-flash",
+        model="gemini-2.5-flash",
         contents=prompt,
         config={
             "response_mime_type": "application/json",
             "response_schema": AnalyticsIntent,
         },
     )
-    
+
     result = AnalyticsIntent.model_validate_json(response.text)
-    
+
     return result
