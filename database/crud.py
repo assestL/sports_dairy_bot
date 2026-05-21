@@ -3,6 +3,7 @@ CRUD операции.
 Полностью совместимы с вашей PostgreSQL БД.
 """
 
+import logging
 from datetime import datetime
 from typing import Optional
 
@@ -16,16 +17,22 @@ from database.models import (
 
 from services.gemini_service import WorkoutParseResult
 
+logger = logging.getLogger(__name__)
+
 
 def get_or_create_user(
     telegram_id: int,
     username: Optional[str] = None
 ) -> User:
 
+    logger.info(f"[DB] Вызов get_or_create_user: telegram_id={telegram_id}, username={username}")
+    
     db = get_session_sync()
+    logger.info(f"[DB] Сессия успешно создана")
 
     try:
-
+        logger.info(f"[DB] Поиск пользователя с telegram_id={telegram_id}")
+        
         user = (
             db.query(User)
             .filter(User.telegram_id == telegram_id)
@@ -33,28 +40,40 @@ def get_or_create_user(
         )
 
         if user is None:
-
+            logger.info(f"[DB] Пользователь не найден, создаём нового")
+            
             user = User(
                 telegram_id=int(telegram_id),
                 username=username,
                 created_at=datetime.utcnow()
             )
+            
+            logger.info(f"[DB] Объект User создан: {user}")
 
             db.add(user)
+            logger.info(f"[DB] Объект User добавлен в сессию")
 
             db.commit()
+            logger.info(f"[DB] Транзакция закоммичена")
 
             db.refresh(user)
+            logger.info(f"[DB] Объект User обновлён после коммита")
 
             print(
                 f"[DB] CREATED USER {telegram_id}"
             )
+            logger.info(f"[DB] Пользователь успешно создан: telegram_id={telegram_id}")
+
+        else:
+            logger.info(f"[DB] Пользователь уже существует: {user}")
 
         return user
 
     except Exception as e:
-
+        logger.error(f"[DB ERROR] Ошибка при работе с пользователем: {e}", exc_info=True)
+        
         db.rollback()
+        logger.info(f"[DB] Выполнен rollback транзакции")
 
         print(
             f"[DB ERROR] {str(e)}"
@@ -63,8 +82,8 @@ def get_or_create_user(
         raise e
 
     finally:
-
         db.close()
+        logger.info(f"[DB] Сессия закрыта")
 
 
 def save_workout(
