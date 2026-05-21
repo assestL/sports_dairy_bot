@@ -56,7 +56,7 @@ def get_gemini_client() -> genai.Client:
     return _gemini_client
 
 
-async def parse_workout_text(text: str) -> WorkoutParseResult:
+async def parse_workout_text(text: str, telegram_date: str = None) -> WorkoutParseResult:
     """
     Отправляет текст пользователя в Gemini API для парсинга структуры тренировки.
     
@@ -65,6 +65,7 @@ async def parse_workout_text(text: str) -> WorkoutParseResult:
     
     Args:
         text: Текст описания тренировки от пользователя
+        telegram_date: Дата сообщения Telegram в формате YYYY-MM-DD (используется по умолчанию, если в тексте не указана дата)
         
     Returns:
         WorkoutParseResult: Структурированные данные о тренировке
@@ -76,16 +77,18 @@ async def parse_workout_text(text: str) -> WorkoutParseResult:
 Ты — помощник для анализа спортивных тренировок. 
 Пользователь отправит тебе описание своей тренировки в свободной форме.
 Твоя задача:
-1. Извлечь дату тренировки (если не указана, используй текущую дату в формате YYYY-MM-DD)
+1. Извлечь дату тренировки из текста. Если дата не указана, ИСПОЛЬЗУЙ дату из параметра telegram_date ({telegram_date})
 2. Распознать все выполненные упражнения с параметрами: название, вес, подходы, повторения
 3. Выделить заметки пользователя о самочувствии (если есть)
 4. Сформулировать краткую рекомендацию для улучшения следующих тренировок
 
 Отвечай ТОЛЬКО в формате JSON согласно предоставленной схеме. Не добавляй никаких пояснений вне JSON.
 
+Дата сообщения Telegram (используй как дату тренировки по умолчанию): {telegram_date}
+
 Текст тренировки пользователя:
 {text}
-""".format(text=text)
+""".format(text=text, telegram_date=telegram_date or "сегодня")
     
     # Используем генерацию с Response Schema для строгой валидации
     response = client.models.generate_content(

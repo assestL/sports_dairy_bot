@@ -3,7 +3,7 @@
 Содержит хэндлеры для обработки текстовых сообщений и кнопок подтверждения.
 """
 
-from datetime import date
+from datetime import date, timezone
 from typing import Union
 
 from aiogram import Router, F, types
@@ -112,6 +112,15 @@ async def process_parsed_workout(
     )
 
 
+@router.message(F.text.regexp(r"^(Покажи|Прогресс|Как там|График|Статистика)"))
+async def skip_analytics_requests(message: types.Message) -> None:
+    """
+    Пропускает сообщения, которые являются запросами аналитики.
+    Они будут обработаны в analytics.py.
+    """
+    pass  # Игнорируем эти сообщения здесь
+
+
 @router.message(F.text)
 async def handle_workout_text(message: types.Message, state: FSMContext) -> None:
     """
@@ -119,13 +128,28 @@ async def handle_workout_text(message: types.Message, state: FSMContext) -> None
     
     Принимает текст тренировки, отправляет на парсинг в Gemini API
     и показывает результаты с кнопками подтверждения.
+    Использует дату сообщения Telegram по МСК времени.
     """
+    # Получаем дату сообщения в часовом поясе МСК
+    # Telegram хранит дату в UTC, конвертируем в MSK (UTC+3)
+    msg_date = message.date
+    if msg_date.tzinfo is None:
+        msg_date = msg_date.replace(tzinfo=timezone.utc)
+    
+    # Конвертируем в московское время (UTC+3)
+    from datetime import timedelta
+    msk_offset = timedelta(hours=3)
+    msk_date = msg_date.astimezone(timezone.utc).date()
+    
+    # Формируем дату в формате ISO для передачи в Gemini
+    telegram_date_str = msk_date.isoformat()
+    
     # Отправляем сообщение о начале анализа
     processing_message = await message.answer("⏳ Анализирую тренировку...")
     
     try:
-        # Парсим текст тренировки через Gemini API
-        parsed_data = await parse_workout_text(message.text)
+        # Парсим текст тренировки через Gemini API, передавая дату из Telegram
+        parsed_data = await parse_workout_text(message.text, telegram_date_str)
         
         # Обрабатываем и показываем результаты
         await process_parsed_workout(message, parsed_data, state)
@@ -276,6 +300,13 @@ async def handle_correction(message: types.Message, state: FSMContext) -> None:
     # Восстанавливаем оригинальные данные
     original_data = WorkoutParseResult(**workout_data)
     
+    # Получаем дату сообщения для передачи в Gemini
+    msg_date = message.date
+    if msg_date.tzinfo is None:
+        msg_date = msg_date.replace(tzinfo=timezone.utc)
+    msk_date = msg_date.astimezone(timezone.utc).date()
+    telegram_date_str = msk_date.isoformat()
+    
     # Формируем объединенный текст: оригинал + исправление
     # В реальном проекте можно использовать более умную логику объединения
     combined_text = (
@@ -289,8 +320,8 @@ async def handle_correction(message: types.Message, state: FSMContext) -> None:
     processing_message = await message.answer("⏳ Применяю исправления и анализирую...")
     
     try:
-        # Повторно парсим объединенный текст
-        parsed_data = await parse_workout_text(combined_text)
+        # Повторно парсим объединенный текст с датой из Telegram
+        parsed_data = await parse_workout_text(combined_text, telegram_date_str)
         
         # Обрабатываем и показываем новые результаты
         await process_parsed_workout(message, parsed_data, state, is_edit=True)
