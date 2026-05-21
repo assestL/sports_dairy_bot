@@ -217,50 +217,5 @@ async def cmd_exercises(message: types.Message):
         session.close()
 
 
-@router.message(F.text.regexp(r"^(Покажи|Прогресс|Как там|График|Статистика)"))
-async def handle_analytics_request(message: types.Message):
-    """
-    Обработчик текстовых запросов аналитики.
-    
-    Бот вызывает extract_analytics_intent для извлечения намерения,
-    затем ищет данные в БД и строит график прогресса.
-    """
-    telegram_id = message.from_user.id
-    text = message.text
-    
-    # Извлекаем намерение через Gemini API
-    try:
-        intent = await extract_analytics_intent(text)
-    except Exception as e:
-        await message.answer(
-            "Не удалось распознать ваш запрос. Попробуйте сформулировать иначе, например:\n"
-            "«Покажи мой прогресс в жиме лежа за 2 месяца»",
-            reply_markup=create_main_menu_keyboard()
-        )
-        return
-    
-    exercise_name = intent.exercise_name
-    period_days = intent.period_days
-    
-    # Получаем историю тренировок из БД
-    history_data = get_workout_history(telegram_id, exercise_name, period_days)
-    
-    # Проверяем количество точек данных
-    if len(history_data) < 2:
-        await message.answer(
-            "Недостаточно данных для построения графика по этому упражнению.\n"
-            f"Найдено записей: {len(history_data)}\n"
-            "Продолжайте вести дневник тренировок!",
-            reply_markup=create_main_menu_keyboard()
-        )
-        return
-    
-    # Строим график
-    chart_file = render_exercise_chart(history_data, exercise_name)
-    
-    # Отправляем график пользователю
-    await message.answer_photo(
-        photo=chart_file,
-        caption=f"Ваш прогресс в упражнении: {exercise_name}",
-        reply_markup=create_main_menu_keyboard()
-    )
+# Убираем regexp-хэндлер, так как теперь все запросы обрабатываются через determine_user_intent в workout.py
+# Этот хэндлер больше не нужен, чтобы избежать дублирования обработки
