@@ -26,7 +26,7 @@ def get_workout_history(telegram_id: int, exercise_name: str, days: int) -> List
     
     Args:
         telegram_id: Telegram ID пользователя
-        exercise_name: Название упражнения для анализа
+        exercise_name: Название упражнения для анализа (в любом регистре)
         days: Количество дней для анализа
         
     Returns:
@@ -37,6 +37,9 @@ def get_workout_history(telegram_id: int, exercise_name: str, days: int) -> List
         # Вычисляем дату начала периода
         end_date = datetime.now().date()
         start_date = end_date - timedelta(days=days)
+        
+        # Нормализуем название упражнения к нижнему регистру для поиска
+        exercise_name_normalized = exercise_name.strip().lower()
         
         # Строим запрос с JOIN между WorkoutSession и WorkoutDetail
         # Используем subquery для получения максимального веса по каждой дате
@@ -52,7 +55,7 @@ def get_workout_history(telegram_id: int, exercise_name: str, days: int) -> List
             .where(
                 and_(
                     WorkoutSession.telegram_id == telegram_id,
-                    WorkoutDetail.exercise_name.ilike(f"%{exercise_name}%"),
+                    WorkoutDetail.exercise_name == exercise_name_normalized,
                     WorkoutSession.session_date >= start_date,
                     WorkoutSession.session_date <= end_date
                 )
