@@ -46,7 +46,7 @@ def get_sync_database_url() -> str:
 # Используем psycopg2 для синхронной работы
 engine = create_engine(
     get_sync_database_url(),
-    echo=False,  # Установите True для отладки SQL-запросов
+    echo=True,  # Включаем логирование SQL-запросов для отладки
     pool_pre_ping=True,  # Проверка соединения перед использованием
 )
 
