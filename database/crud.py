@@ -54,53 +54,63 @@ def save_workout(telegram_id: int, parsed_data: WorkoutParseResult) -> WorkoutSe
     
     Args:
         telegram_id: Telegram ID пользователя
-        parsed_data: Распарсенные данные тренировки из Gemini API
+        parsed_data: Распарсенные данные тренировки из Gemini API (содержит список sessions)
         
     Returns:
-        Объект сохраненной сессии тренировки
+        Объект сохраненной сессии тренировки (последней из списка)
     """
     db = get_session_sync()
     try:
-        # Преобразуем дату тренировки в формат date, если она строка
-        workout_date = parsed_data.workout_date
-        if isinstance(workout_date, str):
-            from datetime import date
-            workout_date = date.fromisoformat(workout_date)
+        last_session = None
         
-        # Создаем сессию тренировки
-        session = WorkoutSession(
-            telegram_id=telegram_id,
-            session_date=workout_date,
-            user_notes=parsed_data.wellness_notes,
-            created_at=datetime.utcnow()
-        )
-        db.add(session)
-        db.flush()  # Получаем session_id перед добавлением деталей
-        
-        # Добавляем детали упражнений
-        for exercise in parsed_data.exercises:
-            detail = WorkoutDetail(
-                session_id=session.session_id,
-                exercise_name=exercise.name,
-                weight=exercise.weight,
-                sets_count=exercise.sets,
-                reps_count=exercise.reps
+        # Обрабатываем каждую сессию из списка
+        for session_data in parsed_data.sessions:
+            # Преобразуем дату тренировки в формат date, если она строка
+            workout_date = session_data.date
+            if isinstance(workout_date, str):
+                from datetime import date
+                workout_date = date.fromisoformat(workout_date)
+            
+            # Создаем сессию тренировки
+            session = WorkoutSession(
+                telegram_id=telegram_id,
+                session_date=workout_date,
+                user_notes=session_data.wellness_notes,
+                created_at=datetime.utcnow()
             )
-            db.add(detail)
-        
-        # Добавляем AI-рекомендацию
-        recommendation = AIRecommendation(
-            session_id=session.session_id,
-            advice_text=parsed_data.recommendation,
-            is_read=False
-        )
-        db.add(recommendation)
+            db.add(session)
+            db.flush()  # Получаем session_id перед добавлением деталей
+            
+            # Добавляем детали упражнений для этой сессии
+            for exercise in session_data.exercises:
+                detail = WorkoutDetail(
+                    session_id=session.session_id,
+                    exercise_name=exercise.name,
+                    weight=exercise.weight,
+                    sets_count=exercise.sets,
+                    reps_count=exercise.reps
+                )
+                db.add(detail)
+            
+            # Добавляем AI-рекомендацию для этой сессии
+            if session_data.recommendation:
+                recommendation = AIRecommendation(
+                    session_id=session.session_id,
+                    advice_text=session_data.recommendation,
+                    is_read=False
+                )
+                db.add(recommendation)
+            
+            last_session = session
         
         # Фиксируем все изменения в одной транзакции
         db.commit()
-        db.refresh(session)
         
-        return session
+        # Возвращаем последнюю сохраненную сессию
+        if last_session:
+            db.refresh(last_session)
+        
+        return last_session
     except Exception as e:
         db.rollback()  # Откатываем транзакцию при ошибке
         raise e
