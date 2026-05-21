@@ -45,36 +45,47 @@ def create_confirmation_keyboard() -> types.InlineKeyboardMarkup:
 
 def format_workout_result(parsed_data: WorkoutParseResult) -> str:
     """
-    Форматирует распарсенные данные тренировки в красивое сообщение.
+    Форматирует распарсенные данные тренировок в красивое сообщение.
     
     Args:
-        parsed_data: Распарсенные данные тренировки
+        parsed_data: Распарсенные данные тренировок (список сессий)
         
     Returns:
         Отформатированный текст для отправки пользователю
     """
-    # Преобразуем дату в читаемый формат
-    workout_date = parsed_data.workout_date
-    if isinstance(workout_date, str):
-        try:
-            workout_date = date.fromisoformat(workout_date)
-        except ValueError:
-            pass
+    if not parsed_data.sessions:
+        return "⚠️ Не удалось распознать ни одной тренировки.\nПожалуйста, опишите подробнее."
     
-    # Формируем заголовок с датой
-    result_text = f"📅 <b>Тренировка за {workout_date}</b>\n\n"
+    result_text = ""
     
-    # Добавляем список упражнений
-    result_text += "<b>Упражнения:</b>\n"
-    for i, exercise in enumerate(parsed_data.exercises, 1):
-        result_text += (
-            f"{i}. <b>{exercise.name}</b> - "
-            f"{exercise.weight}кг × {exercise.reps} ({exercise.sets} подхода)\n"
-        )
-    
-    # Добавляем заметки о самочувствии, если они есть
-    if parsed_data.wellness_notes:
-        result_text += f"\n💭 <b>Заметки:</b>\n<i>{parsed_data.wellness_notes}</i>\n"
+    # Обрабатываем каждую сессию отдельно
+    for session_idx, session in enumerate(parsed_data.sessions, 1):
+        # Преобразуем дату в читаемый формат
+        workout_date = session.date
+        if isinstance(workout_date, str):
+            try:
+                workout_date = date.fromisoformat(workout_date)
+            except ValueError:
+                pass
+        
+        # Добавляем разделитель между сессиями
+        if session_idx > 1:
+            result_text += "\n" + "─" * 30 + "\n\n"
+        
+        # Формируем заголовок с датой
+        result_text += f"📅 <b>Тренировка за {workout_date}</b>\n\n"
+        
+        # Добавляем список упражнений
+        result_text += "<b>Упражнения:</b>\n"
+        for i, exercise in enumerate(session.exercises, 1):
+            result_text += (
+                f"{i}. <b>{exercise.name}</b> - "
+                f"{exercise.weight}кг × {exercise.reps} ({exercise.sets} подхода)\n"
+            )
+        
+        # Добавляем заметки о самочувствии, если они есть
+        if session.wellness_notes:
+            result_text += f"\n💭 <b>Заметки:</b>\n<i>{session.wellness_notes}</i>\n"
     
     return result_text
 
@@ -224,7 +235,7 @@ async def confirm_workout(callback: CallbackQuery, state: FSMContext) -> None:
     """
     Обработчик нажатия кнопки "Сохранить".
     
-    Сохраняет тренировку в базу данных и показывает AI-рекомендацию.
+    Сохраняет ВСЕ тренировочные сессии в базу данных и показывает AI-рекомендацию.
     """
     # Получаем сохраненные данные из FSM storage
     data = await state.get_data()
@@ -245,22 +256,28 @@ async def confirm_workout(callback: CallbackQuery, state: FSMContext) -> None:
     )
     
     try:
-        # Сохраняем тренировку в БД
-        session = save_workout(
+        # Сохраняем все сессии в БД (функция сама обработает список sessions)
+        saved_session = save_workout(
             telegram_id=callback.from_user.id,
             parsed_data=parsed_data
         )
         
-        # Формируем сообщение с рекомендацией от ИИ
-        recommendation_text = (
-            "✅ <b>Тренировка успешно сохранена!</b>\n\n"
+        # Формируем сообщение с рекомендацией от ИИ (берем из всех сессий или объединяем)
+        recommendations = [s.recommendation for s in parsed_data.sessions if s.recommendation]
+        if recommendations:
+            recommendation_text = "\n\n".join(recommendations)
+        else:
+            recommendation_text = "Отличная работа! Продолжайте в том же духе."
+        
+        final_message = (
+            f"✅ <b>Сохранено тренировок: {len(parsed_data.sessions)}</b>\n\n"
             f"🤖 <b>Рекомендация AI-тренера:</b>\n"
-            f"<i>{parsed_data.recommendation}</i>"
+            f"<i>{recommendation_text}</i>"
         )
         
         # Отправляем сообщение с рекомендацией
         await callback.message.answer(
-            text=recommendation_text,
+            text=final_message,
             parse_mode="HTML"
         )
         
@@ -362,11 +379,19 @@ async def handle_correction(message: types.Message, state: FSMContext) -> None:
     telegram_date_str = msk_date.isoformat()
     
     # Формируем объединенный текст: оригинал + исправление
-    # В реальном проекте можно использовать более умную логику объединения
+    # Собираем информацию о всех сессиях
+    sessions_info = []
+    for session in original_data.sessions:
+        session_date = session.date
+        if isinstance(session_date, str):
+            session_date = session_date
+        exercises_str = ", ".join([f"{e.name} ({e.weight}кг {e.sets}x{e.reps})" for e in session.exercises])
+        sessions_info.append(f"Дата: {session_date}, Упражнения: {exercises_str}")
+    
     combined_text = (
-        f"{original_data.workout_date}\n"
-        f"Упражнения: {[e.name for e in original_data.exercises]}\n"
-        f"Заметки: {original_data.wellness_notes or 'нет'}\n\n"
+        f"ИСХОДНЫЕ ДАННЫЕ:\n"
+        f"{'; '.join(sessions_info)}\n"
+        f"Заметки: {original_data.sessions[0].wellness_notes if original_data.sessions and original_data.sessions[0].wellness_notes else 'нет'}\n\n"
         f"ИСПРАВЛЕНИЕ ПОЛЬЗОВАТЕЛЯ: {message.text}"
     )
     
