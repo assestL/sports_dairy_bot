@@ -12,9 +12,10 @@ from aiogram.types import CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from database.crud import save_workout
-from services.gemini_service import parse_workout_text, WorkoutParseResult
+from services.gemini_service import parse_workout_text, WorkoutParseResult, determine_user_intent, AnalyticsIntent
 from utils.states import WorkoutStates
 from handlers.analytics import create_main_menu_keyboard
+from services.chart_service import get_workout_history, render_exercise_chart
 
 # Создаем роутер для регистрации хэндлеров
 router = Router()
@@ -114,16 +115,18 @@ async def process_parsed_workout(
 
 
 @router.message(F.text)
-async def handle_workout_text(message: types.Message, state: FSMContext) -> None:
+async def handle_user_message(message: types.Message, state: FSMContext) -> None:
     """
-    Обработчик текстовых сообщений для записи тренировки.
+    Универсальный обработчик текстовых сообщений.
     
-    Принимает текст тренировки, отправляет на парсинг в Gemini API
-    и показывает результаты с кнопками подтверждения.
-    Использует дату сообщения Telegram по МСК времени.
+    Использует ИИ для определения намерения пользователя:
+    - Запись тренировки (workout)
+    - Запрос аналитики (analytics)
+    - Другое (other)
     
     ВАЖНО: Этот хэндлер обрабатывает ТОЛЬКО обычные текстовые сообщения.
-    Команды (начинающиеся с /) и запросы аналитики обрабатываются в analytics.py.
+    Команды (начинающиеся с /) обрабатываются отдельно через Command фильтр.
+    Кнопки меню обрабатываются отдельными хэндлерами через F.text == "..."
     """
     # Получаем дату сообщения в часовом поясе МСК
     # Telegram хранит дату в UTC, конвертируем в MSK (UTC+3)
@@ -137,29 +140,83 @@ async def handle_workout_text(message: types.Message, state: FSMContext) -> None
     # Формируем дату в формате ISO для передачи в Gemini
     telegram_date_str = msk_date.isoformat()
     
+    text = message.text
+    
     # Отправляем сообщение о начале анализа
-    processing_message = await message.answer("⏳ Анализирую тренировку...")
+    processing_message = await message.answer("⏳ Анализирую ваш запрос...")
     
     try:
-        # Парсим текст тренировки через Gemini API, передавая дату из Telegram
-        parsed_data = await parse_workout_text(message.text, telegram_date_str)
+        # Определяем намерение пользователя через Gemini API
+        intent = await determine_user_intent(text, telegram_date_str)
         
-        # Обрабатываем и показываем результаты
-        await process_parsed_workout(message, parsed_data, state)
+        if intent.intent_type == 'workout':
+            # Это запись тренировки
+            await processing_message.delete()
+            await process_parsed_workout(message, intent.workout_data, state)
+            
+        elif intent.intent_type == 'analytics':
+            # Это запрос аналитики
+            await processing_message.delete()
+            await handle_analytics_intent(message, intent.analytics_data)
+            
+        else:
+            # Неизвестное намерение - предлагаем записать тренировку или показать помощь
+            await processing_message.delete()
+            await message.answer(
+                "🤔 Я не совсем понял ваш запрос.\n\n"
+                "Вы можете:\n"
+                "• 📝 Описать тренировку: <i>\"Жим лежа 80кг 3х10\"</i>\n"
+                "• 📈 Узнать прогресс: <i>\"Покажи прогресс в приседаниях\"</i>\n"
+                "• 📊 Посмотреть упражнения: нажмите кнопку «Мои упражнения»\n\n"
+                "Или выберите действие в меню ниже.",
+                reply_markup=create_main_menu_keyboard(),
+                parse_mode="HTML"
+            )
         
     except Exception as e:
-        # Обрабатываем ошибки парсинга
+        # Обрабатываем ошибки
+        await processing_message.delete()
         await message.answer(
-            f"❌ Произошла ошибка при анализе тренировки: {str(e)}\n\n"
-            "Пожалуйста, попробуйте описать тренировку подробнее.",
+            f"❌ Произошла ошибка при анализе: {str(e)}\n\n"
+            "Пожалуйста, попробуйте описать подробнее или используйте кнопки меню.",
             reply_markup=create_main_menu_keyboard()
         )
-    finally:
-        # Удаляем сообщение "Анализирую..."
-        try:
-            await processing_message.delete()
-        except Exception:
-            pass
+
+
+async def handle_analytics_intent(message: types.Message, intent: AnalyticsIntent):
+    """
+    Обрабатывает намерение аналитики - строит график прогресса.
+    
+    Args:
+        message: Сообщение от пользователя
+        intent: Извлеченное намерение аналитики
+    """
+    telegram_id = message.from_user.id
+    exercise_name = intent.exercise_name
+    period_days = intent.period_days
+    
+    # Получаем историю тренировок из БД
+    history_data = get_workout_history(telegram_id, exercise_name, period_days)
+    
+    # Проверяем количество точек данных
+    if len(history_data) < 2:
+        await message.answer(
+            "Недостаточно данных для построения графика по этому упражнению.\n"
+            f"Найдено записей: {len(history_data)}\n"
+            "Продолжайте вести дневник тренировок!",
+            reply_markup=create_main_menu_keyboard()
+        )
+        return
+    
+    # Строим график
+    chart_file = render_exercise_chart(history_data, exercise_name)
+    
+    # Отправляем график пользователю
+    await message.answer_photo(
+        photo=chart_file,
+        caption=f"Ваш прогресс в упражнении: {exercise_name}",
+        reply_markup=create_main_menu_keyboard()
+    )
 
 
 @router.callback_query(F.data == "workout_confirm")
