@@ -3,7 +3,7 @@
 Содержит хэндлеры для обработки текстовых сообщений и кнопок подтверждения.
 """
 
-from datetime import date, timezone
+from datetime import date, timezone, timedelta
 from typing import Union
 
 from aiogram import Router, F, types
@@ -14,6 +14,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from database.crud import save_workout
 from services.gemini_service import parse_workout_text, WorkoutParseResult
 from utils.states import WorkoutStates
+from handlers.analytics import create_main_menu_keyboard
 
 # Создаем роутер для регистрации хэндлеров
 router = Router()
@@ -112,15 +113,6 @@ async def process_parsed_workout(
     )
 
 
-@router.message(F.text.regexp(r"^(Покажи|Прогресс|Как там|График|Статистика)"))
-async def skip_analytics_requests(message: types.Message) -> None:
-    """
-    Пропускает сообщения, которые являются запросами аналитики.
-    Они будут обработаны в analytics.py.
-    """
-    pass  # Игнорируем эти сообщения здесь
-
-
 @router.message(F.text)
 async def handle_workout_text(message: types.Message, state: FSMContext) -> None:
     """
@@ -129,6 +121,9 @@ async def handle_workout_text(message: types.Message, state: FSMContext) -> None
     Принимает текст тренировки, отправляет на парсинг в Gemini API
     и показывает результаты с кнопками подтверждения.
     Использует дату сообщения Telegram по МСК времени.
+    
+    ВАЖНО: Этот хэндлер обрабатывает ТОЛЬКО обычные текстовые сообщения.
+    Команды (начинающиеся с /) и запросы аналитики обрабатываются в analytics.py.
     """
     # Получаем дату сообщения в часовом поясе МСК
     # Telegram хранит дату в UTC, конвертируем в MSK (UTC+3)
@@ -137,8 +132,6 @@ async def handle_workout_text(message: types.Message, state: FSMContext) -> None
         msg_date = msg_date.replace(tzinfo=timezone.utc)
     
     # Конвертируем в московское время (UTC+3)
-    from datetime import timedelta
-    msk_offset = timedelta(hours=3)
     msk_date = msg_date.astimezone(timezone.utc).date()
     
     # Формируем дату в формате ISO для передачи в Gemini
@@ -158,7 +151,8 @@ async def handle_workout_text(message: types.Message, state: FSMContext) -> None
         # Обрабатываем ошибки парсинга
         await message.answer(
             f"❌ Произошла ошибка при анализе тренировки: {str(e)}\n\n"
-            "Пожалуйста, попробуйте описать тренировку подробнее."
+            "Пожалуйста, попробуйте описать тренировку подробнее.",
+            reply_markup=create_main_menu_keyboard()
         )
     finally:
         # Удаляем сообщение "Анализирую..."
@@ -217,7 +211,8 @@ async def confirm_workout(callback: CallbackQuery, state: FSMContext) -> None:
         # Обрабатываем ошибки сохранения
         await callback.message.answer(
             f"❌ Ошибка при сохранении: {str(e)}\n\n"
-            "Пожалуйста, попробуйте позже."
+            "Пожалуйста, попробуйте позже.",
+            reply_markup=create_main_menu_keyboard()
         )
     finally:
         # Очищаем состояние FSM
@@ -267,7 +262,8 @@ async def cancel_workout(callback: CallbackQuery, state: FSMContext) -> None:
     # Отправляем сообщение об отмене
     await callback.message.answer(
         "🚫 Запись тренировки отменена.\n\n"
-        "Если хотите записать тренировку, просто отправьте текст с описанием."
+        "Если хотите записать тренировку, просто отправьте текст с описанием.",
+        reply_markup=create_main_menu_keyboard()
     )
     
     # Убираем клавиатуру из предыдущего сообщения
@@ -292,7 +288,8 @@ async def handle_correction(message: types.Message, state: FSMContext) -> None:
     if not workout_data:
         await message.answer(
             "❌ Данные тренировки не найдены.\n"
-            "Пожалуйста, отправьте описание тренировки заново."
+            "Пожалуйста, отправьте описание тренировки заново.",
+            reply_markup=create_main_menu_keyboard()
         )
         await state.clear()
         return
@@ -330,7 +327,8 @@ async def handle_correction(message: types.Message, state: FSMContext) -> None:
         # Обрабатываем ошибки парсинга
         await message.answer(
             f"❌ Произошла ошибка при применении исправлений: {str(e)}\n\n"
-            "Пожалуйста, попробуйте описать исправление подробнее."
+            "Пожалуйста, попробуйте описать исправление подробнее.",
+            reply_markup=create_main_menu_keyboard()
         )
     finally:
         # Удаляем сообщение "Применяю исправления..."
