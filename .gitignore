@@ -6,17 +6,11 @@ __pycache__/
 *.pyd
 
 # Dependencies
-.venv/
 venv/
-env/
+.venv/
 .env
 .env.local
 .env.*
-
-# Build artifacts
-dist/
-build/
-*.egg-info/
 
 # Logs
 *.log
@@ -25,6 +19,18 @@ build/
 .coverage
 coverage/
 htmlcov/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
 
 # Testing
 .pytest_cache/
