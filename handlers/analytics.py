@@ -5,7 +5,7 @@
 
 from aiogram import Router, types, F
 from aiogram.filters import Command, CommandStart
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, Union, CallbackQuery
 from sqlalchemy import distinct, select
 
 from database.connection import get_session_sync
@@ -25,7 +25,8 @@ def create_main_menu_keyboard() -> ReplyKeyboardMarkup:
     """
     kb = [
         [KeyboardButton(text="📊 Мои упражнения"), KeyboardButton(text="📈 Показать прогресс")],
-        [KeyboardButton(text="📝 Записать тренировку"), KeyboardButton(text="❓ Помощь")]
+        [KeyboardButton(text="📝 Записать тренировку"), KeyboardButton(text="📖 Дневник тренировок")],
+        [KeyboardButton(text="❓ Помощь")]
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
@@ -215,6 +216,129 @@ async def cmd_exercises(message: types.Message):
         )
     finally:
         session.close()
+
+
+@router.message(F.text == "📖 Дневник тренировок")
+async def btn_workout_diary(message: types.Message):
+    """
+    Обработчик кнопки «📖 Дневник тренировок».
+    Отправляет первую страницу дневника тренировок.
+    """
+    await show_workout_diary_page(message, page=0)
+
+
+async def show_workout_diary_page(
+    message: Union[types.Message, types.CallbackQuery],
+    page: int
+):
+    """
+    Показывает страницу дневника тренировок с пагинацией.
+    
+    Args:
+        message: Сообщение или callback query
+        page: Номер страницы (0-based)
+    """
+    from sqlalchemy import select, desc
+    from aiogram.types import InlineKeyboardButton
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    
+    telegram_id = message.from_user.id if hasattr(message, 'from_user') else message.from_user.id
+    
+    session = get_session_sync()
+    try:
+        # Получаем все тренировки пользователя, отсортированные от новых к старым
+        query = (
+            select(WorkoutSession)
+            .where(WorkoutSession.telegram_id == telegram_id)
+            .order_by(desc(WorkoutSession.session_date))
+        )
+        
+        sessions = session.execute(query).scalars().all()
+        
+        if not sessions:
+            await message.answer(
+                "У вас пока нет записанных тренировок.\n"
+                "Начните вести дневник тренировок, отправляя описание тренировки боту.",
+                reply_markup=create_main_menu_keyboard()
+            )
+            return
+        
+        ITEMS_PER_PAGE = 10
+        total_pages = (len(sessions) + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
+        
+        # Ограничиваем номер страницы допустимыми значениями
+        if page < 0:
+            page = 0
+        if page >= total_pages:
+            page = total_pages - 1 if total_pages > 0 else 0
+        
+        start_idx = page * ITEMS_PER_PAGE
+        end_idx = min(start_idx + ITEMS_PER_PAGE, len(sessions))
+        page_sessions = sessions[start_idx:end_idx]
+        
+        # Формируем текст страницы
+        result_text = f"📖 <b>Дневник тренировок</b>\nСтраница {page + 1} из {total_pages}\n\n"
+        
+        for idx, session in enumerate(page_sessions, start=start_idx + 1):
+            result_text += f"{idx}. 📅 {session.session_date.strftime('%d.%m.%Y')}\n"
+            
+            # Получаем детали тренировки
+            details_query = (
+                select(WorkoutDetail)
+                .where(WorkoutDetail.session_id == session.session_id)
+            )
+            details = session.execute(details_query).scalars().all()
+            
+            for detail in details:
+                if detail.weight > 0:
+                    result_text += f"   {detail.exercise_name}: {detail.sets_count}x{detail.reps_count} ({detail.weight} кг)\n"
+                else:
+                    result_text += f"   {detail.exercise_name}: {detail.sets_count}x{detail.reps_count}\n"
+            
+            if session.user_notes:
+                result_text += f"   💬 {session.user_notes}\n"
+            
+            result_text += "\n"
+        
+        # Создаем клавиатуру навигации
+        builder = InlineKeyboardBuilder()
+        
+        nav_buttons = []
+        if page > 0:
+            nav_buttons.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"diary_page_{page - 1}"))
+        if page < total_pages - 1:
+            nav_buttons.append(InlineKeyboardButton(text="Вперёд ➡️", callback_data=f"diary_page_{page + 1}"))
+        
+        if nav_buttons:
+            builder.row(*nav_buttons)
+        
+        keyboard = builder.as_markup()
+        
+        if isinstance(message, types.CallbackQuery):
+            await message.message.edit_text(
+                result_text,
+                parse_mode="HTML",
+                reply_markup=keyboard
+            )
+            await message.answer()
+        else:
+            await message.answer(
+                result_text,
+                parse_mode="HTML",
+                reply_markup=keyboard
+            )
+            
+    finally:
+        session.close()
+
+
+@router.callback_query(F.data.startswith("diary_page_"))
+async def handle_diary_navigation(callback: CallbackQuery):
+    """
+    Обработчик навигации по страницам дневника тренировок.
+    """
+    page = int(callback.data.split("_")[-1])
+    await show_workout_diary_page(callback, page)
 
 
 # Убираем regexp-хэндлер, так как теперь все запросы обрабатываются через determine_user_intent в workout.py

@@ -208,11 +208,25 @@ async def handle_analytics_intent(
     message: types.Message,
     intent: AnalyticsIntent
 ):
+    from datetime import datetime as dt
+
+    # Если указаны конкретные даты, используем их
+    start_date_obj = None
+    end_date_obj = None
+    
+    if intent.start_date and intent.end_date:
+        try:
+            start_date_obj = dt.strptime(intent.start_date, "%Y-%m-%d")
+            end_date_obj = dt.strptime(intent.end_date, "%Y-%m-%d")
+        except ValueError:
+            pass
 
     history_data = get_workout_history(
         telegram_id=message.from_user.id,
         exercise_name=intent.exercise_name,
-        days=intent.period_days
+        days=intent.period_days,
+        start_date=start_date_obj,
+        end_date=end_date_obj
     )
 
     if len(history_data) < 1:

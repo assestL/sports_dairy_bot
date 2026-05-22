@@ -48,14 +48,22 @@ def normalize_exercise_name(name: str) -> str:
 def get_workout_history(
     telegram_id: int,
     exercise_name: str,
-    days: int
+    days: int,
+    start_date: datetime = None,
+    end_date: datetime = None
 ):
 
     session = get_session_sync()
 
     try:
-
-        start_date = datetime.now().date() - timedelta(days=days)
+        # Если указаны конкретные даты, используем их
+        if start_date is not None and end_date is not None:
+            query_start = start_date
+            query_end = end_date
+        else:
+            # Иначе используем период дней от текущей даты
+            query_end = datetime.now().date()
+            query_start = query_end - timedelta(days=days)
 
         normalized = normalize_exercise_name(exercise_name)
 
@@ -78,7 +86,8 @@ def get_workout_history(
                         f"%{normalized}%"
                     ),
 
-                    WorkoutSession.session_date >= start_date
+                    WorkoutSession.session_date >= query_start,
+                    WorkoutSession.session_date <= query_end
                 )
             )
             .order_by(WorkoutSession.session_date)
@@ -126,6 +135,14 @@ def render_exercise_chart(
 
     dates = [x[0] for x in history_data]
     values = [x[1] for x in history_data]
+
+    # Добавляем запас пустого места: снизу 10, сверху 5
+    if values:
+        min_val = min(values)
+        max_val = max(values)
+        y_min = max(0, min_val - 10)  # снизу запас 10, но не меньше 0
+        y_max = max_val + 5  # сверху запас 5
+        ax.set_ylim(y_min, y_max)
 
     ax.plot(
         dates,
