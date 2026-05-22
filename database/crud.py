@@ -196,3 +196,89 @@ def save_workout(
 
     finally:
         db.close()
+
+
+async def get_user_workout_sessions(telegram_id: int):
+    """
+    Получает все тренировки пользователя, отсортированные от новых к старым.
+    """
+    from sqlalchemy import select
+    from database.connection import get_session_sync
+    from database.models import WorkoutSession
+    
+    db = get_session_sync()
+    try:
+        query = (
+            select(WorkoutSession)
+            .where(WorkoutSession.telegram_id == telegram_id)
+            .order_by(WorkoutSession.session_date.desc())
+        )
+        sessions = db.execute(query).scalars().all()
+        return list(sessions)
+    finally:
+        db.close()
+
+
+async def delete_workout_session(session_id: int):
+    """
+    Удаляет тренировку и все связанные детали.
+    """
+    from sqlalchemy import delete
+    from database.connection import get_session_sync
+    from database.models import WorkoutDetail, WorkoutSession, AIRecommendation
+    
+    db = get_session_sync()
+    try:
+        # Сначала удаляем детали тренировки
+        db.execute(delete(WorkoutDetail).where(WorkoutDetail.session_id == session_id))
+        # Удаляем рекомендации
+        db.execute(delete(AIRecommendation).where(AIRecommendation.session_id == session_id))
+        # Удаляем саму сессию
+        db.execute(delete(WorkoutSession).where(WorkoutSession.session_id == session_id))
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise e
+    finally:
+        db.close()
+
+
+async def update_workout_session(session_id: int, exercises: list, notes: str = None):
+    """
+    Обновляет тренировку: удаляет старые детали и добавляет новые.
+    """
+    from sqlalchemy import delete
+    from database.connection import get_session_sync
+    from database.models import WorkoutDetail, WorkoutSession
+    
+    db = get_session_sync()
+    try:
+        # Обновляем заметки сессии
+        if notes is not None:
+            session_obj = db.query(WorkoutSession).filter(WorkoutSession.session_id == session_id).first()
+            if session_obj:
+                session_obj.user_notes = notes
+        
+        # Удаляем старые детали тренировки
+        db.execute(delete(WorkoutDetail).where(WorkoutDetail.session_id == session_id))
+        
+        # Добавляем новые детали
+        for exercise in exercises:
+            sets_count = len(exercise.reps)
+            reps_count = max(exercise.reps) if exercise.reps else 0
+            
+            detail = WorkoutDetail(
+                session_id=session_id,
+                exercise_name=exercise.name.lower().strip().replace("ё", "е"),
+                weight=exercise.weight,
+                sets_count=sets_count,
+                reps_count=reps_count
+            )
+            db.add(detail)
+        
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise e
+    finally:
+        db.close()
