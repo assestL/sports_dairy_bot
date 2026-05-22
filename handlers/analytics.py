@@ -377,11 +377,41 @@ async def handle_diary_edit(callback: CallbackQuery, state: FSMContext):
     """
     Обработчик выбора тренировки для редактирования/удаления.
     """
+    from database.crud import get_user_workout_sessions
+    
     workout_number = int(callback.data.split("_")[-1])
 
     # Сохраняем номер тренировки и текущую страницу в состоянии
     await state.update_data(edit_workout_number=workout_number)
     await state.set_state(WorkoutStates.waiting_for_edit)
+
+    # Получаем текущую информацию о тренировке
+    user_id = callback.from_user.id
+    sessions = await get_user_workout_sessions(user_id)
+    
+    current_workout_info = ""
+    if workout_number <= len(sessions):
+        session = sessions[workout_number - 1]
+        current_workout_info = f"\n\n📋 <b>Текущая информация:</b>\n"
+        current_workout_info += f"📅 {session.session_date.strftime('%d.%m.%Y')}\n"
+        
+        # Получаем детали тренировки
+        from sqlalchemy import select
+        from database.connection import get_session_sync
+        from database.models import WorkoutDetail
+        
+        db_session = get_session_sync()
+        try:
+            details_query = select(WorkoutDetail).where(WorkoutDetail.session_id == session.session_id)
+            details = db_session.execute(details_query).scalars().all()
+            
+            for detail in details:
+                if detail.weight > 0:
+                    current_workout_info += f"   {detail.exercise_name}: {detail.sets_count}x{detail.reps_count} ({detail.weight} кг)\n"
+                else:
+                    current_workout_info += f"   {detail.exercise_name}: {detail.sets_count}x{detail.reps_count}\n"
+        finally:
+            db_session.close()
 
     # Создаём клавиатуру с кнопками удаления и отмены
     builder = InlineKeyboardBuilder()
@@ -402,8 +432,10 @@ async def handle_diary_edit(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
         f"✏️ <b>Редактирование тренировки #{workout_number}</b>\n\n"
         f"Отправьте новое описание тренировки для обновления.\n\n"
-        f"Пример описания:\n"
-        f"\"Отжимания 4 подхода по 20 раз с весом 10 кг\"",
+        f"Или используйте кнопки ниже:\n"
+        f"• 🗑 Удалить тренировку — удалит эту тренировку из дневника\n"
+        f"• ❌ Отменить — выйдет из режима редактирования\n\n"
+        f"{current_workout_info}",
         parse_mode="HTML",
         reply_markup=keyboard
     )
@@ -414,7 +446,7 @@ async def handle_diary_cancel(callback: CallbackQuery, state: FSMContext):
     """
     Обработчик отмены действия в дневнике тренировок.
     """
-    await state.clear_state()
+    await state.clear()
     
     await callback.message.edit_text(
         "❌ Действие отменено.\n\nВыберите команду из меню:",
@@ -443,14 +475,14 @@ async def handle_diary_delete(callback: CallbackQuery, state: FSMContext):
                 f"❌ Тренировка #{workout_number} не найдена.",
                 show_alert=True
             )
-            await state.clear_state()
+            await state.clear()
             return
         
         # Удаляем тренировку (сессии отсортированы от новых к старым)
         session_to_delete = sessions[workout_number - 1]
         await delete_workout_session(session_to_delete.session_id)
         
-        await state.clear_state()
+        await state.clear()
         
         await callback.message.edit_text(
             f"✅ Тренировка #{workout_number} от {session_to_delete.session_date.strftime('%d.%m.%Y')} успешно удалена!",

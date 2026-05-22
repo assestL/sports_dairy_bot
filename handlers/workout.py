@@ -421,7 +421,7 @@ async def handle_workout_edit(message: types.Message, state: FSMContext):
             "Попробуйте снова выбрать тренировку из дневника.",
             reply_markup=create_main_menu_keyboard()
         )
-        await state.clear_state()
+        await state.clear()
         return
     
     # Парсим новое описание тренировки через ИИ
@@ -444,7 +444,7 @@ async def handle_workout_edit(message: types.Message, state: FSMContext):
                 f"❌ Тренировка #{workout_number} не найдена.",
                 reply_markup=create_main_menu_keyboard()
             )
-            await state.clear_state()
+            await state.clear()
             return
         
         # Обновляем тренировку
@@ -468,4 +468,4 @@ async def handle_workout_edit(message: types.Message, state: FSMContext):
             pass
         await message.answer(f"❌ Ошибка при обновлении: {str(e)}")
     
-    await state.clear_state()
+    await state.clear()
