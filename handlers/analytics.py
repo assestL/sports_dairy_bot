@@ -450,7 +450,7 @@ async def handle_diary_cancel(callback: CallbackQuery, state: FSMContext):
     
     await callback.message.edit_text(
         "❌ Действие отменено.\n\nВыберите команду из меню:",
-        reply_markup=create_main_menu_keyboard()
+        reply_markup=None
     )
     
     await callback.answer()
