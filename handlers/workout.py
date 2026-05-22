@@ -440,11 +440,17 @@ async def handle_workout_edit(message: types.Message, state: FSMContext):
     session_to_update = sessions[workout_number - 1]
     workout_date_str = session_to_update.session_date.strftime("%Y-%m-%d")
     
-    # Парсим новое описание тренировки через ИИ, передавая дату тренировки
+    # Парсим новое описание тренировки через ИИ, передавая флаг редактирования
     processing = await message.answer("⏳ Обрабатываю новое описание тренировки...")
     
     try:
-        parsed = await parse_workout_text(message.text, telegram_date=workout_date_str)
+        # ВАЖНО: передаём is_edit=True и existing_date, чтобы ИИ понял, что это редактирование
+        parsed = await parse_workout_text(
+            message.text,
+            telegram_date=workout_date_str,
+            is_edit=True,
+            existing_date=workout_date_str
+        )
         
         try:
             await processing.delete()
@@ -454,8 +460,8 @@ async def handle_workout_edit(message: types.Message, state: FSMContext):
         # Обновляем тренировку
         await update_workout_session(
             session_id=session_to_update.session_id,
-            exercises=parsed.exercises,
-            notes=parsed.notes
+            exercises=parsed.sessions[0].exercises if parsed.sessions else [],
+            notes=parsed.sessions[0].wellness_notes if parsed.sessions else None
         )
         
         await message.answer(
