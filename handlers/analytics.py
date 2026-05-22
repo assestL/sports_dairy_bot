@@ -242,7 +242,13 @@ async def show_workout_diary_page(
     from aiogram.types import InlineKeyboardButton
     from aiogram.utils.keyboard import InlineKeyboardBuilder
     
-    telegram_id = message.from_user.id if hasattr(message, 'from_user') else message.from_user.id
+    # Получаем telegram_id в зависимости от типа объекта
+    if isinstance(message, types.CallbackQuery):
+        telegram_id = message.from_user.id
+        original_message = message.message
+    else:
+        telegram_id = message.from_user.id
+        original_message = None
     
     session = get_session_sync()
     try:
@@ -315,12 +321,18 @@ async def show_workout_diary_page(
         keyboard = builder.as_markup()
         
         if isinstance(message, types.CallbackQuery):
-            await message.message.edit_text(
-                result_text,
-                parse_mode="HTML",
-                reply_markup=keyboard
-            )
-            await message.answer()
+            if original_message:
+                await original_message.edit_text(
+                    result_text,
+                    parse_mode="HTML",
+                    reply_markup=keyboard
+                )
+            else:
+                await message.message.answer(
+                    result_text,
+                    parse_mode="HTML",
+                    reply_markup=keyboard
+                )
         else:
             await message.answer(
                 result_text,
