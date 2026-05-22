@@ -5,12 +5,14 @@
 
 from aiogram import Router, types, F
 from aiogram.filters import Command, CommandStart
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, Union, CallbackQuery
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, Union, CallbackQuery, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import distinct, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.connection import get_session_sync
-from database.models import WorkoutDetail, WorkoutSession
+from database.models import WorkoutDetail, WorkoutSession, User
 from services.chart_service import get_workout_history, render_exercise_chart
 from services.gemini_service import extract_analytics_intent
 from utils.states import WorkoutStates
@@ -241,8 +243,6 @@ async def show_workout_diary_page(
         page: Номер страницы (0-based)
     """
     from sqlalchemy import select, desc
-    from aiogram.types import InlineKeyboardButton
-    from aiogram.utils.keyboard import InlineKeyboardBuilder
     
     # Получаем telegram_id в зависимости от типа объекта
     if isinstance(message, types.CallbackQuery):
@@ -372,26 +372,77 @@ async def handle_diary_navigation(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("diary_edit_"))
-async def handle_diary_edit(callback: CallbackQuery, state: FSMContext):
+async def handle_diary_edit(callback: CallbackQuery, session: AsyncSession):
     """
     Обработчик выбора тренировки для редактирования/удаления.
     """
     workout_number = int(callback.data.split("_")[-1])
     
-    # Сохраняем номер тренировки и текущую страницу в состоянии
-    await state.update_data(edit_workout_number=workout_number)
-    await state.set_state(WorkoutStates.waiting_for_edit)
+    # Получаем тренировку по номеру на странице
+    # Сначала получаем все тренировки пользователя
+    user = await session.get(User, callback.from_user.id)
+    if not user:
+        await callback.answer("Пользователь не найден", show_alert=True)
+        return
     
-    await callback.message.edit_text(
-        f"✏️ <b>Редактирование тренировки #{workout_number}</b>\n\n"
-        f"Отправьте новое описание тренировки или используйте команды:\n"
-        f"• <code>/delete {workout_number}</code> — удалить тренировку\n"
-        f"• /cancel — отменить действие\n\n"
-        f"Пример описания:\n"
-        f"\"Отжимания 4 подхода по 20 раз с весом 10 кг\"",
-        parse_mode="HTML",
-        reply_markup=None
+    all_sessions = await session.execute(
+        select(WorkoutSession)
+        .where(WorkoutSession.telegram_id == user.telegram_id)
+        .order_by(WorkoutSession.session_date.desc())
     )
+    all_sessions_list = all_sessions.scalars().all()
+    
+    # Проверяем, что номер корректный
+    if workout_number < 1 or workout_number > len(all_sessions_list):
+        await callback.answer("Тренировка не найдена", show_alert=True)
+        return
+    
+    workout_session = all_sessions_list[workout_number - 1]
+    session_id = workout_session.session_id
+    
+    # Формируем сообщение с кнопками
+    text = (
+        f"✏️ <b>Редактирование тренировки #{workout_number}</b>\n\n"
+        f"<b>Выберите действие:</b>\n"
+        f"• <b>Отправить новое описание</b> — просто напишите текст, ИИ обработает его и обновит тренировку\n"
+        f"• <b>Удалить тренировку</b> — безвозвратно удалит эту запись\n"
+        f"• <b>Отменить</b> — вернётся в дневник тренировок"
+    )
+    
+    # Создаём клавиатуру с кнопками
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🗑️ Удалить тренировку", callback_data=f"delete_session_{session_id}")],
+        [InlineKeyboardButton(text="❌ Отменить", callback_data="diary_cancel")]
+    ])
+    
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("delete_session_"))
+async def handle_delete_session_callback(callback: CallbackQuery, session: AsyncSession):
+    """Обработка удаления тренировки"""
+    session_id = int(callback.data.split("_")[-1])
+    
+    # Получаем тренировку
+    workout_session = await session.get(WorkoutSession, session_id)
+    if not workout_session:
+        await callback.answer("Тренировка не найдена", show_alert=True)
+        return
+    
+    # Проверяем принадлежность
+    user = await session.get(User, callback.from_user.id)
+    if not user or workout_session.telegram_id != user.telegram_id:
+        await callback.answer("Доступ запрещён", show_alert=True)
+        return
+    
+    # Удаляем тренировку
+    await session.delete(workout_session)
+    await session.commit()
+    
+    # Возвращаемся к дневнику на первую страницу
+    await callback.answer("Тренировка удалена", show_alert=True)
+    await show_workout_diary_page(callback.message, page=0)
 
 
 @router.callback_query(F.data == "diary_cancel")
@@ -399,10 +450,8 @@ async def handle_diary_cancel(callback: CallbackQuery):
     """
     Обработчик отмены действия в дневнике тренировок.
     """
-    await callback.message.edit_text(
-        "❌ Действие отменено.\n\nВыберите команду из меню:",
-        reply_markup=create_main_menu_keyboard()
-    )
+    await callback.answer("Действие отменено", show_alert=True)
+    await show_workout_diary_page(callback.message, page=0)
 
 
 # Убираем regexp-хэндлер, так как теперь все запросы обрабатываются через determine_user_intent в workout.py
