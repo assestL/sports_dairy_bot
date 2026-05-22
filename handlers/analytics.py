@@ -376,26 +376,16 @@ async def handle_diary_edit(callback: CallbackQuery):
     """
     Обработчик выбора тренировки для редактирования/удаления.
     """
+    from database.connection import get_session_sync
+    from database.crud import get_user_workout_sessions
+    
     workout_number = int(callback.data.split("_")[-1])
     
-    async with db_manager.session() as session:
-        # Получаем тренировку по номеру на странице
-        # Сначала получаем все тренировки пользователя
-        user = await session.execute(
-            select(User).where(User.telegram_id == callback.from_user.id)
-        )
-        user = user.scalar_one_or_none()
-        
-        if not user:
-            await callback.answer("Пользователь не найден", show_alert=True)
-            return
-        
-        all_sessions = await session.execute(
-            select(WorkoutSession)
-            .where(WorkoutSession.user_id == user.id)
-            .order_by(WorkoutSession.session_date.desc())
-        )
-        all_sessions_list = all_sessions.scalars().all()
+    session = get_session_sync()
+    try:
+        # Получаем все тренировки пользователя
+        user_id = callback.from_user.id
+        all_sessions_list = await get_user_workout_sessions(user_id)
         
         # Проверяем, что номер корректный
         if workout_number < 1 or workout_number > len(all_sessions_list):
@@ -422,37 +412,27 @@ async def handle_diary_edit(callback: CallbackQuery):
         
         await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
         await callback.answer()
+    finally:
+        session.close()
 
 
 @router.callback_query(F.data.startswith("delete_session_"))
 async def handle_delete_session_callback(callback: CallbackQuery):
     """Обработка удаления тренировки"""
+    from database.connection import get_session_sync
+    from database.crud import delete_workout_session
+    
     session_id = int(callback.data.split("_")[-1])
     
-    async with db_manager.session() as session:
-        # Получаем тренировку
-        workout_session = await session.get(WorkoutSession, session_id)
-        if not workout_session:
-            await callback.answer("Тренировка не найдена", show_alert=True)
-            return
-        
-        # Проверяем принадлежность
-        user = await session.execute(
-            select(User).where(User.telegram_id == callback.from_user.id)
-        )
-        user = user.scalar_one_or_none()
-        
-        if not user or workout_session.user_id != user.id:
-            await callback.answer("Доступ запрещён", show_alert=True)
-            return
-        
-        # Удаляем тренировку
-        await session.delete(workout_session)
-        await session.commit()
+    try:
+        # Удаляем тренировку через CRUD функцию
+        await delete_workout_session(session_id)
         
         # Возвращаемся к дневнику на первую страницу
         await callback.answer("Тренировка удалена", show_alert=True)
         await show_workout_diary_page(callback.message, page=0)
+    except Exception as e:
+        await callback.answer(f"Ошибка при удалении: {str(e)}", show_alert=True)
 
 
 @router.callback_query(F.data == "diary_cancel")
