@@ -7,6 +7,7 @@ from aiogram import Router, types, F
 from aiogram.filters import Command, CommandStart
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, Union, CallbackQuery
 from aiogram.fsm.context import FSMContext
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import distinct, select
 
 from database.connection import get_session_sync
@@ -382,27 +383,81 @@ async def handle_diary_edit(callback: CallbackQuery, state: FSMContext):
     await state.update_data(edit_workout_number=workout_number)
     await state.set_state(WorkoutStates.waiting_for_edit)
 
+    # Создаём клавиатуру с кнопками удаления и отмены
+    builder = InlineKeyboardBuilder()
+    
+    builder.button(
+        text=f"🗑 Удалить тренировку #{workout_number}",
+        callback_data=f"diary_delete_{workout_number}"
+    )
+    
+    builder.button(
+        text="❌ Отменить",
+        callback_data="diary_cancel"
+    )
+    
+    builder.adjust(1)
+    keyboard = builder.as_markup()
+
     await callback.message.edit_text(
         f"✏️ <b>Редактирование тренировки #{workout_number}</b>\n\n"
-        f"Отправьте новое описание тренировки или используйте команды:\n"
-        f"• <code>/delete {workout_number}</code> — удалить тренировку\n"
-        f"• /cancel — отменить действие\n\n"
+        f"Отправьте новое описание тренировки для обновления.\n\n"
         f"Пример описания:\n"
         f"\"Отжимания 4 подхода по 20 раз с весом 10 кг\"",
         parse_mode="HTML",
-        reply_markup=None
+        reply_markup=keyboard
     )
 
 
 @router.callback_query(F.data == "diary_cancel")
-async def handle_diary_cancel(callback: CallbackQuery):
+async def handle_diary_cancel(callback: CallbackQuery, state: FSMContext):
     """
     Обработчик отмены действия в дневнике тренировок.
     """
+    await state.clear_state()
+    
     await callback.message.edit_text(
         "❌ Действие отменено.\n\nВыберите команду из меню:",
         reply_markup=create_main_menu_keyboard()
     )
+    
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("diary_delete_"))
+async def handle_diary_delete(callback: CallbackQuery, state: FSMContext):
+    """
+    Обработчик удаления тренировки из дневника.
+    """
+    from database.crud import get_user_workout_sessions, delete_workout_session
+    
+    workout_number = int(callback.data.split("_")[-1])
+    
+    try:
+        # Получаем все сессии пользователя
+        user_id = callback.from_user.id
+        sessions = await get_user_workout_sessions(user_id)
+        
+        if workout_number > len(sessions):
+            await callback.answer(
+                f"❌ Тренировка #{workout_number} не найдена.",
+                show_alert=True
+            )
+            await state.clear_state()
+            return
+        
+        # Удаляем тренировку (сессии отсортированы от новых к старым)
+        session_to_delete = sessions[workout_number - 1]
+        await delete_workout_session(session_to_delete.session_id)
+        
+        await state.clear_state()
+        
+        await callback.message.edit_text(
+            f"✅ Тренировка #{workout_number} от {session_to_delete.session_date.strftime('%d.%m.%Y')} успешно удалена!",
+            reply_markup=create_main_menu_keyboard()
+        )
+    except Exception as e:
+        await callback.answer(f"❌ Ошибка при удалении: {str(e)}", show_alert=True)
 
 
 # Убираем regexp-хэндлер, так как теперь все запросы обрабатываются через determine_user_intent в workout.py
