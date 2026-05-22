@@ -424,31 +424,34 @@ async def handle_workout_edit(message: types.Message, state: FSMContext):
         await state.clear()
         return
     
-    # Парсим новое описание тренировки через ИИ
+    # Получаем текущие сессии пользователя, чтобы узнать дату редактируемой тренировки
+    user_id = message.from_user.id
+    sessions = await get_user_workout_sessions(user_id)
+    
+    if workout_number > len(sessions):
+        await message.answer(
+            f"❌ Тренировка #{workout_number} не найдена.",
+            reply_markup=create_main_menu_keyboard()
+        )
+        await state.clear()
+        return
+    
+    # Получаем дату редактируемой тренировки для передачи ИИ
+    session_to_update = sessions[workout_number - 1]
+    workout_date_str = session_to_update.session_date.strftime("%Y-%m-%d")
+    
+    # Парсим новое описание тренировки через ИИ, передавая дату тренировки
     processing = await message.answer("⏳ Обрабатываю новое описание тренировки...")
     
     try:
-        parsed = await parse_workout_text(message.text)
+        parsed = await parse_workout_text(message.text, telegram_date=workout_date_str)
         
         try:
             await processing.delete()
         except:
             pass
         
-        # Получаем текущие сессии пользователя
-        user_id = message.from_user.id
-        sessions = await get_user_workout_sessions(user_id)
-        
-        if workout_number > len(sessions):
-            await message.answer(
-                f"❌ Тренировка #{workout_number} не найдена.",
-                reply_markup=create_main_menu_keyboard()
-            )
-            await state.clear()
-            return
-        
         # Обновляем тренировку
-        session_to_update = sessions[workout_number - 1]
         await update_workout_session(
             session_id=session_to_update.session_id,
             exercises=parsed.exercises,
