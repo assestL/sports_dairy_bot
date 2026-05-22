@@ -1,4 +1,1 @@
-```
-__pycache__/
-*.pyc
-```
+Nothing needs to be added to the .gitignore file since only a Python source file (`handlers/analytics.py`) was modified and no build artifacts, dependencies, or temporary files were detected in the changes.

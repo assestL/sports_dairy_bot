@@ -285,13 +285,13 @@ async def show_workout_diary_page(
         # Формируем текст страницы
         result_text = f"📖 <b>Дневник тренировок</b>\nСтраница {page + 1} из {total_pages}\n\n"
         
-        for idx, session in enumerate(page_sessions, start=start_idx + 1):
-            result_text += f"{idx}. 📅 {session.session_date.strftime('%d.%m.%Y')}\n"
+        for idx, workout_session in enumerate(page_sessions, start=start_idx + 1):
+            result_text += f"{idx}. 📅 {workout_session.session_date.strftime('%d.%m.%Y')}\n"
             
             # Получаем детали тренировки
             details_query = (
                 select(WorkoutDetail)
-                .where(WorkoutDetail.session_id == session.session_id)
+                .where(WorkoutDetail.session_id == workout_session.session_id)
             )
             details = session.execute(details_query).scalars().all()
             
