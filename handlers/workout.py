@@ -445,8 +445,16 @@ async def handle_workout_edit(message: types.Message, state: FSMContext):
     
     try:
         # ВАЖНО: передаём is_edit=True и existing_date, чтобы ИИ понял, что это редактирование
+        # Добавляем префикс к тексту, чтобы усилить понимание контекста редактирования
+        edit_context_text = (
+            f"[РЕДАКТИРОВАНИЕ ТРЕНИРОВКИ ОТ {workout_date_str}]\n"
+            f"Это обновление существующей тренировки. НЕ создавай новую запись.\n"
+            f"Используй дату {workout_date_str}.\n\n"
+            f"Новое описание: {message.text}"
+        )
+        
         parsed = await parse_workout_text(
-            message.text,
+            edit_context_text,
             telegram_date=workout_date_str,
             is_edit=True,
             existing_date=workout_date_str
