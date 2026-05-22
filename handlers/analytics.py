@@ -6,12 +6,14 @@
 from aiogram import Router, types, F
 from aiogram.filters import Command, CommandStart
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, Union, CallbackQuery
+from aiogram.fsm.context import FSMContext
 from sqlalchemy import distinct, select
 
 from database.connection import get_session_sync
 from database.models import WorkoutDetail, WorkoutSession
 from services.chart_service import get_workout_history, render_exercise_chart
 from services.gemini_service import extract_analytics_intent
+from utils.states import WorkoutStates
 
 router = Router()
 
@@ -306,17 +308,33 @@ async def show_workout_diary_page(
             
             result_text += "\n"
         
-        # Создаем клавиатуру навигации
+        # Создаем клавиатуру навигации и управления тренировками
         builder = InlineKeyboardBuilder()
         
+        # Кнопки навигации по страницам
         nav_buttons = []
         if page > 0:
             nav_buttons.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"diary_page_{page - 1}"))
         if page < total_pages - 1:
             nav_buttons.append(InlineKeyboardButton(text="Вперёд ➡️", callback_data=f"diary_page_{page + 1}"))
         
+        # Кнопки управления для текущей страницы
+        edit_buttons = []
+        for idx, _ in enumerate(page_sessions, start=start_idx + 1):
+            edit_buttons.append(InlineKeyboardButton(text=str(idx), callback_data=f"diary_edit_{idx}"))
+        
+        # Добавляем кнопки навигации
         if nav_buttons:
             builder.row(*nav_buttons)
+        
+        # Добавляем кнопки выбора тренировки для редактирования
+        if edit_buttons:
+            builder.row(*edit_buttons[:5])  # Первая строка кнопок (до 5)
+            if len(edit_buttons) > 5:
+                builder.row(*edit_buttons[5:])  # Вторая строка кнопок (остальные)
+        
+        # Кнопка отмены
+        builder.row(InlineKeyboardButton(text="❌ Отмена", callback_data="diary_cancel"))
         
         keyboard = builder.as_markup()
         
@@ -351,6 +369,40 @@ async def handle_diary_navigation(callback: CallbackQuery):
     """
     page = int(callback.data.split("_")[-1])
     await show_workout_diary_page(callback, page)
+
+
+@router.callback_query(F.data.startswith("diary_edit_"))
+async def handle_diary_edit(callback: CallbackQuery, state: FSMContext):
+    """
+    Обработчик выбора тренировки для редактирования/удаления.
+    """
+    workout_number = int(callback.data.split("_")[-1])
+    
+    # Сохраняем номер тренировки и текущую страницу в состоянии
+    await state.update_data(edit_workout_number=workout_number)
+    await state.set_state(WorkoutStates.waiting_for_edit)
+    
+    await callback.message.edit_text(
+        f"✏️ <b>Редактирование тренировки #{workout_number}</b>\n\n"
+        f"Отправьте новое описание тренировки или используйте команды:\n"
+        f"• <code>/delete {workout_number}</code> — удалить тренировку\n"
+        f"• /cancel — отменить действие\n\n"
+        f"Пример описания:\n"
+        f"\"Отжимания 4 подхода по 20 раз с весом 10 кг\"",
+        parse_mode="HTML",
+        reply_markup=None
+    )
+
+
+@router.callback_query(F.data == "diary_cancel")
+async def handle_diary_cancel(callback: CallbackQuery):
+    """
+    Обработчик отмены действия в дневнике тренировок.
+    """
+    await callback.message.edit_text(
+        "❌ Действие отменено.\n\nВыберите команду из меню:",
+        reply_markup=create_main_menu_keyboard()
+    )
 
 
 # Убираем regexp-хэндлер, так как теперь все запросы обрабатываются через determine_user_intent в workout.py
