@@ -301,8 +301,8 @@ async def show_workout_diary_page(
                 else:
                     result_text += f"   {detail.exercise_name}: {detail.sets_count}x{detail.reps_count}\n"
             
-            if session.user_notes:
-                result_text += f"   💬 {session.user_notes}\n"
+            if workout_session.user_notes:
+                result_text += f"   💬 {workout_session.user_notes}\n"
             
             result_text += "\n"
         
