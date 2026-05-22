@@ -5,14 +5,12 @@
 
 from aiogram import Router, types, F
 from aiogram.filters import Command, CommandStart
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, Union, CallbackQuery, InlineKeyboardButton
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, Union, CallbackQuery
 from aiogram.fsm.context import FSMContext
-from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import distinct, select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.connection import get_session_sync
-from database.models import WorkoutDetail, WorkoutSession, User
+from database.models import WorkoutDetail, WorkoutSession
 from services.chart_service import get_workout_history, render_exercise_chart
 from services.gemini_service import extract_analytics_intent
 from utils.states import WorkoutStates
@@ -23,7 +21,7 @@ router = Router()
 def create_main_menu_keyboard() -> ReplyKeyboardMarkup:
     """
     Создает клавиатуру главного меню с основными командами.
-    
+
     Returns:
         ReplyKeyboardMarkup с кнопками команд
     """
@@ -105,7 +103,7 @@ async def btn_exercises(message: types.Message):
     Выводит список всех уникальных упражнений пользователя.
     """
     telegram_id = message.from_user.id
-    
+
     session = get_session_sync()
     try:
         # Запрос DISTINCT exercise_name с JOIN между таблицами
@@ -116,10 +114,10 @@ async def btn_exercises(message: types.Message):
             .where(WorkoutSession.telegram_id == telegram_id)
             .order_by(WorkoutDetail.exercise_name)
         )
-        
+
         result = session.execute(query).all()
         exercises = [row[0] for row in result]
-        
+
         if not exercises:
             await message.answer(
                 "У вас пока нет записанных упражнений.\n"
@@ -127,7 +125,7 @@ async def btn_exercises(message: types.Message):
                 reply_markup=create_main_menu_keyboard()
             )
             return
-        
+
         exercises_list = "\n".join(f"• {ex}" for ex in exercises)
         await message.answer(
             f"Ваши упражнения:\n\n{exercises_list}",
@@ -189,7 +187,7 @@ async def cmd_exercises(message: types.Message):
     Выводит список всех уникальных упражнений, которые пользователь когда-либо записывал.
     """
     telegram_id = message.from_user.id
-    
+
     session = get_session_sync()
     try:
         # Запрос DISTINCT exercise_name с JOIN между таблицами
@@ -200,10 +198,10 @@ async def cmd_exercises(message: types.Message):
             .where(WorkoutSession.telegram_id == telegram_id)
             .order_by(WorkoutDetail.exercise_name)
         )
-        
+
         result = session.execute(query).all()
         exercises = [row[0] for row in result]
-        
+
         if not exercises:
             await message.answer(
                 "У вас пока нет записанных упражнений.\n"
@@ -211,7 +209,7 @@ async def cmd_exercises(message: types.Message):
                 reply_markup=create_main_menu_keyboard()
             )
             return
-        
+
         exercises_list = "\n".join(f"• {ex}" for ex in exercises)
         await message.answer(
             f"Ваши упражнения:\n\n{exercises_list}",
@@ -237,13 +235,15 @@ async def show_workout_diary_page(
 ):
     """
     Показывает страницу дневника тренировок с пагинацией.
-    
+
     Args:
         message: Сообщение или callback query
         page: Номер страницы (0-based)
     """
     from sqlalchemy import select, desc
-    
+    from aiogram.types import InlineKeyboardButton
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+
     # Получаем telegram_id в зависимости от типа объекта
     if isinstance(message, types.CallbackQuery):
         telegram_id = message.from_user.id
@@ -251,7 +251,7 @@ async def show_workout_diary_page(
     else:
         telegram_id = message.from_user.id
         original_message = None
-    
+
     session = get_session_sync()
     try:
         # Получаем все тренировки пользователя, отсортированные от новых к старым
@@ -260,9 +260,9 @@ async def show_workout_diary_page(
             .where(WorkoutSession.telegram_id == telegram_id)
             .order_by(desc(WorkoutSession.session_date))
         )
-        
+
         sessions = session.execute(query).scalars().all()
-        
+
         if not sessions:
             await message.answer(
                 "У вас пока нет записанных тренировок.\n"
@@ -270,74 +270,74 @@ async def show_workout_diary_page(
                 reply_markup=create_main_menu_keyboard()
             )
             return
-        
+
         ITEMS_PER_PAGE = 10
         total_pages = (len(sessions) + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
-        
+
         # Ограничиваем номер страницы допустимыми значениями
         if page < 0:
             page = 0
         if page >= total_pages:
             page = total_pages - 1 if total_pages > 0 else 0
-        
+
         start_idx = page * ITEMS_PER_PAGE
         end_idx = min(start_idx + ITEMS_PER_PAGE, len(sessions))
         page_sessions = sessions[start_idx:end_idx]
-        
+
         # Формируем текст страницы
         result_text = f"📖 <b>Дневник тренировок</b>\nСтраница {page + 1} из {total_pages}\n\n"
-        
+
         for idx, workout_session in enumerate(page_sessions, start=start_idx + 1):
             result_text += f"{idx}. 📅 {workout_session.session_date.strftime('%d.%m.%Y')}\n"
-            
+
             # Получаем детали тренировки
             details_query = (
                 select(WorkoutDetail)
                 .where(WorkoutDetail.session_id == workout_session.session_id)
             )
             details = session.execute(details_query).scalars().all()
-            
+
             for detail in details:
                 if detail.weight > 0:
                     result_text += f"   {detail.exercise_name}: {detail.sets_count}x{detail.reps_count} ({detail.weight} кг)\n"
                 else:
                     result_text += f"   {detail.exercise_name}: {detail.sets_count}x{detail.reps_count}\n"
-            
+
             if workout_session.user_notes:
                 result_text += f"   💬 {workout_session.user_notes}\n"
-            
+
             result_text += "\n"
-        
+
         # Создаем клавиатуру навигации и управления тренировками
         builder = InlineKeyboardBuilder()
-        
+
         # Кнопки навигации по страницам
         nav_buttons = []
         if page > 0:
             nav_buttons.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"diary_page_{page - 1}"))
         if page < total_pages - 1:
             nav_buttons.append(InlineKeyboardButton(text="Вперёд ➡️", callback_data=f"diary_page_{page + 1}"))
-        
+
         # Кнопки управления для текущей страницы
         edit_buttons = []
         for idx, _ in enumerate(page_sessions, start=start_idx + 1):
             edit_buttons.append(InlineKeyboardButton(text=str(idx), callback_data=f"diary_edit_{idx}"))
-        
+
         # Добавляем кнопки навигации
         if nav_buttons:
             builder.row(*nav_buttons)
-        
+
         # Добавляем кнопки выбора тренировки для редактирования
         if edit_buttons:
             builder.row(*edit_buttons[:5])  # Первая строка кнопок (до 5)
             if len(edit_buttons) > 5:
                 builder.row(*edit_buttons[5:])  # Вторая строка кнопок (остальные)
-        
+
         # Кнопка отмены
         builder.row(InlineKeyboardButton(text="❌ Отмена", callback_data="diary_cancel"))
-        
+
         keyboard = builder.as_markup()
-        
+
         if isinstance(message, types.CallbackQuery):
             if original_message:
                 await original_message.edit_text(
@@ -357,7 +357,7 @@ async def show_workout_diary_page(
                 parse_mode="HTML",
                 reply_markup=keyboard
             )
-            
+
     finally:
         session.close()
 
@@ -372,67 +372,26 @@ async def handle_diary_navigation(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("diary_edit_"))
-async def handle_diary_edit(callback: CallbackQuery):
+async def handle_diary_edit(callback: CallbackQuery, state: FSMContext):
     """
     Обработчик выбора тренировки для редактирования/удаления.
     """
-    from database.connection import get_session_sync
-    from database.crud import get_user_workout_sessions
-    
     workout_number = int(callback.data.split("_")[-1])
-    
-    session = get_session_sync()
-    try:
-        # Получаем все тренировки пользователя
-        user_id = callback.from_user.id
-        all_sessions_list = await get_user_workout_sessions(user_id)
-        
-        # Проверяем, что номер корректный
-        if workout_number < 1 or workout_number > len(all_sessions_list):
-            await callback.answer("Тренировка не найдена", show_alert=True)
-            return
-        
-        workout_session = all_sessions_list[workout_number - 1]
-        session_id = workout_session.session_id
-        
-        # Формируем сообщение с кнопками
-        text = (
-            f"✏️ <b>Редактирование тренировки #{workout_number}</b>\n\n"
-            f"<b>Выберите действие:</b>\n"
-            f"• <b>Отправить новое описание</b> — просто напишите текст, ИИ обработает его и обновит тренировку\n"
-            f"• <b>Удалить тренировку</b> — безвозвратно удалит эту запись\n"
-            f"• <b>Отменить</b> — вернётся в дневник тренировок"
-        )
-        
-        # Создаём клавиатуру с кнопками
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🗑️ Удалить тренировку", callback_data=f"delete_session_{session_id}")],
-            [InlineKeyboardButton(text="❌ Отменить", callback_data="diary_cancel")]
-        ])
-        
-        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
-        await callback.answer()
-    finally:
-        session.close()
 
+    # Сохраняем номер тренировки и текущую страницу в состоянии
+    await state.update_data(edit_workout_number=workout_number)
+    await state.set_state(WorkoutStates.waiting_for_edit)
 
-@router.callback_query(F.data.startswith("delete_session_"))
-async def handle_delete_session_callback(callback: CallbackQuery):
-    """Обработка удаления тренировки"""
-    from database.connection import get_session_sync
-    from database.crud import delete_workout_session
-    
-    session_id = int(callback.data.split("_")[-1])
-    
-    try:
-        # Удаляем тренировку через CRUD функцию
-        await delete_workout_session(session_id)
-        
-        # Возвращаемся к дневнику на первую страницу
-        await callback.answer("Тренировка удалена", show_alert=True)
-        await show_workout_diary_page(callback.message, page=0)
-    except Exception as e:
-        await callback.answer(f"Ошибка при удалении: {str(e)}", show_alert=True)
+    await callback.message.edit_text(
+        f"✏️ <b>Редактирование тренировки #{workout_number}</b>\n\n"
+        f"Отправьте новое описание тренировки или используйте команды:\n"
+        f"• <code>/delete {workout_number}</code> — удалить тренировку\n"
+        f"• /cancel — отменить действие\n\n"
+        f"Пример описания:\n"
+        f"\"Отжимания 4 подхода по 20 раз с весом 10 кг\"",
+        parse_mode="HTML",
+        reply_markup=None
+    )
 
 
 @router.callback_query(F.data == "diary_cancel")
@@ -440,8 +399,10 @@ async def handle_diary_cancel(callback: CallbackQuery):
     """
     Обработчик отмены действия в дневнике тренировок.
     """
-    await callback.answer("Действие отменено", show_alert=True)
-    await show_workout_diary_page(callback.message, page=0)
+    await callback.message.edit_text(
+        "❌ Действие отменено.\n\nВыберите команду из меню:",
+        reply_markup=create_main_menu_keyboard()
+    )
 
 
 # Убираем regexp-хэндлер, так как теперь все запросы обрабатываются через determine_user_intent в workout.py
