@@ -372,77 +372,87 @@ async def handle_diary_navigation(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("diary_edit_"))
-async def handle_diary_edit(callback: CallbackQuery, session: AsyncSession):
+async def handle_diary_edit(callback: CallbackQuery):
     """
     Обработчик выбора тренировки для редактирования/удаления.
     """
     workout_number = int(callback.data.split("_")[-1])
     
-    # Получаем тренировку по номеру на странице
-    # Сначала получаем все тренировки пользователя
-    user = await session.get(User, callback.from_user.id)
-    if not user:
-        await callback.answer("Пользователь не найден", show_alert=True)
-        return
-    
-    all_sessions = await session.execute(
-        select(WorkoutSession)
-        .where(WorkoutSession.telegram_id == user.telegram_id)
-        .order_by(WorkoutSession.session_date.desc())
-    )
-    all_sessions_list = all_sessions.scalars().all()
-    
-    # Проверяем, что номер корректный
-    if workout_number < 1 or workout_number > len(all_sessions_list):
-        await callback.answer("Тренировка не найдена", show_alert=True)
-        return
-    
-    workout_session = all_sessions_list[workout_number - 1]
-    session_id = workout_session.session_id
-    
-    # Формируем сообщение с кнопками
-    text = (
-        f"✏️ <b>Редактирование тренировки #{workout_number}</b>\n\n"
-        f"<b>Выберите действие:</b>\n"
-        f"• <b>Отправить новое описание</b> — просто напишите текст, ИИ обработает его и обновит тренировку\n"
-        f"• <b>Удалить тренировку</b> — безвозвратно удалит эту запись\n"
-        f"• <b>Отменить</b> — вернётся в дневник тренировок"
-    )
-    
-    # Создаём клавиатуру с кнопками
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🗑️ Удалить тренировку", callback_data=f"delete_session_{session_id}")],
-        [InlineKeyboardButton(text="❌ Отменить", callback_data="diary_cancel")]
-    ])
-    
-    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
-    await callback.answer()
+    async with db_manager.session() as session:
+        # Получаем тренировку по номеру на странице
+        # Сначала получаем все тренировки пользователя
+        user = await session.execute(
+            select(User).where(User.telegram_id == callback.from_user.id)
+        )
+        user = user.scalar_one_or_none()
+        
+        if not user:
+            await callback.answer("Пользователь не найден", show_alert=True)
+            return
+        
+        all_sessions = await session.execute(
+            select(WorkoutSession)
+            .where(WorkoutSession.user_id == user.id)
+            .order_by(WorkoutSession.session_date.desc())
+        )
+        all_sessions_list = all_sessions.scalars().all()
+        
+        # Проверяем, что номер корректный
+        if workout_number < 1 or workout_number > len(all_sessions_list):
+            await callback.answer("Тренировка не найдена", show_alert=True)
+            return
+        
+        workout_session = all_sessions_list[workout_number - 1]
+        session_id = workout_session.session_id
+        
+        # Формируем сообщение с кнопками
+        text = (
+            f"✏️ <b>Редактирование тренировки #{workout_number}</b>\n\n"
+            f"<b>Выберите действие:</b>\n"
+            f"• <b>Отправить новое описание</b> — просто напишите текст, ИИ обработает его и обновит тренировку\n"
+            f"• <b>Удалить тренировку</b> — безвозвратно удалит эту запись\n"
+            f"• <b>Отменить</b> — вернётся в дневник тренировок"
+        )
+        
+        # Создаём клавиатуру с кнопками
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🗑️ Удалить тренировку", callback_data=f"delete_session_{session_id}")],
+            [InlineKeyboardButton(text="❌ Отменить", callback_data="diary_cancel")]
+        ])
+        
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+        await callback.answer()
 
 
 @router.callback_query(F.data.startswith("delete_session_"))
-async def handle_delete_session_callback(callback: CallbackQuery, session: AsyncSession):
+async def handle_delete_session_callback(callback: CallbackQuery):
     """Обработка удаления тренировки"""
     session_id = int(callback.data.split("_")[-1])
     
-    # Получаем тренировку
-    workout_session = await session.get(WorkoutSession, session_id)
-    if not workout_session:
-        await callback.answer("Тренировка не найдена", show_alert=True)
-        return
-    
-    # Проверяем принадлежность
-    user = await session.get(User, callback.from_user.id)
-    if not user or workout_session.telegram_id != user.telegram_id:
-        await callback.answer("Доступ запрещён", show_alert=True)
-        return
-    
-    # Удаляем тренировку
-    await session.delete(workout_session)
-    await session.commit()
-    
-    # Возвращаемся к дневнику на первую страницу
-    await callback.answer("Тренировка удалена", show_alert=True)
-    await show_workout_diary_page(callback.message, page=0)
+    async with db_manager.session() as session:
+        # Получаем тренировку
+        workout_session = await session.get(WorkoutSession, session_id)
+        if not workout_session:
+            await callback.answer("Тренировка не найдена", show_alert=True)
+            return
+        
+        # Проверяем принадлежность
+        user = await session.execute(
+            select(User).where(User.telegram_id == callback.from_user.id)
+        )
+        user = user.scalar_one_or_none()
+        
+        if not user or workout_session.user_id != user.id:
+            await callback.answer("Доступ запрещён", show_alert=True)
+            return
+        
+        # Удаляем тренировку
+        await session.delete(workout_session)
+        await session.commit()
+        
+        # Возвращаемся к дневнику на первую страницу
+        await callback.answer("Тренировка удалена", show_alert=True)
+        await show_workout_diary_page(callback.message, page=0)
 
 
 @router.callback_query(F.data == "diary_cancel")
