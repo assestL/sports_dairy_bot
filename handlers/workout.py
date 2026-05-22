@@ -410,7 +410,7 @@ async def handle_workout_edit(message: types.Message, state: FSMContext):
     Обработчик редактирования тренировки из дневника.
     Получает новое описание тренировки и использует ИИ для парсинга.
     """
-    from database.crud import get_user_workout_sessions, delete_workout_session, update_workout_session
+    from database.crud import get_user_workout_sessions, update_workout_session
     
     data = await state.get_data()
     workout_number = data.get("edit_workout_number")
@@ -419,44 +419,6 @@ async def handle_workout_edit(message: types.Message, state: FSMContext):
         await message.answer(
             "❌ Ошибка: не найден номер тренировки для редактирования.\n"
             "Попробуйте снова выбрать тренировку из дневника.",
-            reply_markup=create_main_menu_keyboard()
-        )
-        await state.clear_state()
-        return
-    
-    # Проверяем команду удаления
-    if message.text.startswith("/delete"):
-        try:
-            # Получаем все сессии пользователя
-            user_id = message.from_user.id
-            sessions = await get_user_workout_sessions(user_id)
-            
-            if workout_number > len(sessions):
-                await message.answer(
-                    f"❌ Тренировка #{workout_number} не найдена.",
-                    reply_markup=create_main_menu_keyboard()
-                )
-                await state.clear_state()
-                return
-            
-            # Удаляем тренировку (сессии отсортированы от новых к старым)
-            session_to_delete = sessions[workout_number - 1]
-            await delete_workout_session(session_to_delete.session_id)
-            
-            await message.answer(
-                f"✅ Тренировка #{workout_number} от {session_to_delete.session_date.strftime('%d.%m.%Y')} успешно удалена!",
-                reply_markup=create_main_menu_keyboard()
-            )
-        except Exception as e:
-            await message.answer(f"❌ Ошибка при удалении: {str(e)}")
-        
-        await state.clear_state()
-        return
-    
-    # Проверяем команду отмены
-    if message.text == "/cancel":
-        await message.answer(
-            "❌ Редактирование отменено.",
             reply_markup=create_main_menu_keyboard()
         )
         await state.clear_state()
