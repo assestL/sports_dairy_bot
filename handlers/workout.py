@@ -73,17 +73,135 @@ async def process_parsed_workout(
         reply_markup=create_confirmation_keyboard()
     )
 
-# ВНИМАНИЕ: FSM ОБРАБОТЧИКИ ДОЛЖНЫ БЫТЬ СТРОГО ВЫШЕ ОБЩЕГО F.text !
-@router.message(WorkoutStates.waiting_for_correction)
-async def handle_correction(
+@router.message(F.text)
+async def handle_user_message(
     message: types.Message,
     state: FSMContext
 ):
+    get_or_create_user(
+        telegram_id=message.from_user.id,
+        username=message.from_user.username
+    )
+
+    msg_date = message.date
+    if msg_date.tzinfo is None:
+        msg_date = msg_date.replace(tzinfo=timezone.utc)
+    msk_date = msg_date.astimezone(MSK).date()
+    telegram_date_str = msk_date.isoformat()
+
+    processing_message = await message.answer("⏳ Анализирую...")
+    try:
+        intent = await determine_user_intent(message.text, telegram_date_str)
+        try: await processing_message.delete()
+        except: pass
+
+        if intent.intent_type == "workout":
+            await process_parsed_workout(message, intent.workout_data, state)
+        elif intent.intent_type == "analytics":
+            await handle_analytics_intent(message, intent.analytics_data)
+        else:
+            await message.answer("Не понял запрос.", reply_markup=create_main_menu_keyboard())
+    except Exception as e:
+        try: await processing_message.delete()
+        except: pass
+        await message.answer(f"Ошибка:\n{str(e)}", reply_markup=create_main_menu_keyboard())
+
+
+async def handle_analytics_intent(
+        message: types.Message,
+        intent: AnalyticsIntent
+):
+    from datetime import datetime as dt
+
+    # Проверяем, указано ли название упражнения
+    if not intent.exercise_name:
+        await message.answer(
+            "📊 Пожалуйста, укажите название упражнения, по которому хотите увидеть прогресс.\n"
+            "Например: <i>«Покажи прогресс в жиме лежа»</i>",
+            reply_markup=create_main_menu_keyboard(),
+            parse_mode="HTML"
+        )
+        return
+
+    start_date_obj = None
+    end_date_obj = None
+    if intent.start_date and intent.end_date:
+        try:
+            start_date_obj = dt.strptime(intent.start_date, "%Y-%m-%d")
+            end_date_obj = dt.strptime(intent.end_date, "%Y-%m-%d")
+        except ValueError:
+            pass
+
+    history_data = get_workout_history(
+        telegram_id=message.from_user.id,
+        exercise_name=intent.exercise_name,
+        days=intent.period_days,
+        start_date=start_date_obj,
+        end_date=end_date_obj
+    )
+
+    # Проверяем, что данных достаточно для графика
+    if len(history_data) < 2:
+        if len(history_data) == 1:
+            await message.answer(
+                f"📊 По упражнению «{intent.exercise_name}» найдена только 1 запись.\n"
+                f"Для построения графика прогресса нужно минимум 2 тренировки с этим упражнением.\n"
+                f"Продолжайте тренироваться! 💪",
+                reply_markup=create_main_menu_keyboard()
+            )
+        else:
+            await message.answer(
+                f"📊 По упражнению «{intent.exercise_name}» нет записанных тренировок.\n"
+                f"Начните вести дневник, отправляя описание тренировки боту!",
+                reply_markup=create_main_menu_keyboard()
+            )
+        return
+
+    chart = render_exercise_chart(history_data, intent.exercise_name)
+    await message.answer_photo(
+        photo=chart,
+        caption=f"📈 Прогресс: {intent.exercise_name}",
+        reply_markup=create_main_menu_keyboard()
+    )
+
+@router.callback_query(F.data == "workout_confirm")
+async def confirm_workout(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    workout_data = data.get("workout_data")
+    if not workout_data:
+        await callback.answer("Нет данных тренировки.", show_alert=True)
+        return
+
+    parsed_data = WorkoutParseResult(**workout_data)
+    try:
+        get_or_create_user(telegram_id=callback.from_user.id, username=callback.from_user.username)
+        save_workout(telegram_id=callback.from_user.id, parsed_data=parsed_data)
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.answer("✅ Тренировка сохранена.", reply_markup=create_main_menu_keyboard())
+    except Exception as e:
+        await callback.message.answer(f"Ошибка сохранения:\n{str(e)}")
+    finally:
+        await state.clear()
+
+@router.callback_query(F.data == "workout_cancel")
+async def cancel_workout(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.answer("Тренировка отменена.", reply_markup=create_main_menu_keyboard())
+    await callback.answer()
+
+@router.callback_query(F.data == "workout_edit")
+async def edit_workout(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(WorkoutStates.waiting_for_correction)
+    await callback.message.answer("Напиши исправление.")
+    await callback.answer()
+
+@router.message(WorkoutStates.waiting_for_correction)
+async def handle_correction(message: types.Message, state: FSMContext):
     data = await state.get_data()
     workout_data = data.get("workout_data")
     if not workout_data:
         await message.answer("Нет данных тренировки.")
-        await state.clear()
         return
 
     processing = await message.answer("⏳ Исправляю...")
@@ -96,13 +214,9 @@ async def handle_correction(
         try: await processing.delete()
         except: pass
         await message.answer(f"Ошибка:\n{str(e)}")
-        await state.clear()
 
 @router.message(WorkoutStates.waiting_for_edit)
 async def handle_workout_edit(message: types.Message, state: FSMContext):
-    """
-    Обработчик редактирования тренировки из дневника.
-    """
     from database.crud import get_user_workout_sessions, update_workout_session
 
     data = await state.get_data()
@@ -156,113 +270,6 @@ async def handle_workout_edit(message: types.Message, state: FSMContext):
     except Exception as e:
         try: await processing.delete()
         except: pass
-        await message.answer(f"❌ Ошибка при обновлении: {str(e)}", reply_markup=create_main_menu_keyboard())
+        await message.answer(f"❌ Ошибка при обновлении: {str(e)}")
     finally:
         await state.clear()
-
-
-# Общий обработчик текста (ВСЕГДА ниже FSM состояний)
-@router.message(F.text)
-async def handle_user_message(
-    message: types.Message,
-    state: FSMContext
-):
-    get_or_create_user(
-        telegram_id=message.from_user.id,
-        username=message.from_user.username
-    )
-
-    msg_date = message.date
-    if msg_date.tzinfo is None:
-        msg_date = msg_date.replace(tzinfo=timezone.utc)
-    msk_date = msg_date.astimezone(MSK).date()
-    telegram_date_str = msk_date.isoformat()
-
-    processing_message = await message.answer("⏳ Анализирую...")
-    try:
-        intent = await determine_user_intent(message.text, telegram_date_str)
-        try: await processing_message.delete()
-        except: pass
-
-        if intent.intent_type == "workout":
-            await process_parsed_workout(message, intent.workout_data, state)
-        elif intent.intent_type == "analytics":
-            await handle_analytics_intent(message, intent.analytics_data)
-        else:
-            await message.answer("Не понял запрос.", reply_markup=create_main_menu_keyboard())
-    except Exception as e:
-        try: await processing_message.delete()
-        except: pass
-        await message.answer(f"Ошибка:\n{str(e)}", reply_markup=create_main_menu_keyboard())
-
-async def handle_analytics_intent(
-    message: types.Message,
-    intent: AnalyticsIntent
-):
-    from datetime import datetime as dt
-    start_date_obj = None
-    end_date_obj = None
-    if intent.start_date and intent.end_date:
-        try:
-            start_date_obj = dt.strptime(intent.start_date, "%Y-%m-%d")
-            end_date_obj = dt.strptime(intent.end_date, "%Y-%m-%d")
-        except ValueError:
-            pass
-
-    history_data = get_workout_history(
-        telegram_id=message.from_user.id,
-        exercise_name=intent.exercise_name,
-        days=intent.period_days,
-        start_date=start_date_obj,
-        end_date=end_date_obj
-    )
-
-    if len(history_data) < 1:
-        await message.answer("Недостаточно данных.", reply_markup=create_main_menu_keyboard())
-        return
-
-    chart = render_exercise_chart(history_data, intent.exercise_name)
-    await message.answer_photo(
-        photo=chart,
-        caption=f"Прогресс: {intent.exercise_name}",
-        reply_markup=create_main_menu_keyboard()
-    )
-
-@router.callback_query(F.data == "workout_confirm")
-async def confirm_workout(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    workout_data = data.get("workout_data")
-    if not workout_data:
-        await callback.answer("Нет данных тренировки.", show_alert=True)
-        return
-
-    parsed_data = WorkoutParseResult(**workout_data)
-    try:
-        get_or_create_user(
-            telegram_id=callback.from_user.id,
-            username=callback.from_user.username
-        )
-        save_workout(
-            telegram_id=callback.from_user.id,
-            parsed_data=parsed_data
-        )
-        await callback.message.edit_reply_markup(reply_markup=None)
-        await callback.message.answer("✅ Тренировка сохранена.", reply_markup=create_main_menu_keyboard())
-    except Exception as e:
-        await callback.message.answer(f"Ошибка сохранения:\n{str(e)}")
-    finally:
-        await state.clear()
-        await callback.answer()
-
-@router.callback_query(F.data == "workout_cancel")
-async def cancel_workout(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
-    await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.message.answer("Тренировка отменена.", reply_markup=create_main_menu_keyboard())
-    await callback.answer()
-
-@router.callback_query(F.data == "workout_edit")
-async def edit_workout(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(WorkoutStates.waiting_for_correction)
-    await callback.message.answer("Напиши исправление.")
-    await callback.answer()
