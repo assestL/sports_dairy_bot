@@ -16,6 +16,7 @@ from services.gemini_service import WorkoutParseResult
 
 logger = logging.getLogger(__name__)
 
+
 def get_or_create_user(
     telegram_id: int,
     username: Optional[str] = None
@@ -47,6 +48,7 @@ def get_or_create_user(
         raise e
     finally:
         db.close()
+
 
 def save_workout(
     telegram_id: int,
@@ -122,11 +124,8 @@ def save_workout(
     finally:
         db.close()
 
+
 async def get_user_workout_sessions(telegram_id: int):
-    """
-    Получает все тренировки пользователя, отсортированные от новых к старым.
-    Добавлена сортировка по session_id для стабильности порядка.
-    """
     from sqlalchemy import select
     from database.models import WorkoutSession
 
@@ -142,17 +141,12 @@ async def get_user_workout_sessions(telegram_id: int):
     finally:
         db.close()
 
+
 async def delete_workout_session(session_id: int):
-    """
-    Удаляет тренировку и все связанные детали каскадно через ORM.
-    Это предотвращает ошибки Foreign Key Violation (ON DELETE NO ACTION).
-    """
     db = get_session_sync()
     try:
         session_obj = db.query(WorkoutSession).filter(WorkoutSession.session_id == session_id).first()
         if session_obj:
-            # SQLAlchemy сам корректно удалит workout_details и ai_recommendations
-            # благодаря cascade="all, delete-orphan" в моделях
             db.delete(session_obj)
             db.commit()
     except Exception as e:
@@ -161,24 +155,19 @@ async def delete_workout_session(session_id: int):
     finally:
         db.close()
 
+
 async def update_workout_session(session_id: int, exercises: list, notes: str = None):
-    """
-    Обновляет тренировку: удаляет старые детали и добавляет новые.
-    """
     db = get_session_sync()
     try:
         session_obj = db.query(WorkoutSession).filter(WorkoutSession.session_id == session_id).first()
         if not session_obj:
             raise ValueError("Сессия не найдена")
 
-        # Обновляем заметки (даже если они пустые, чтобы очистить старые)
         session_obj.user_notes = notes
 
-        # Удаляем старые детали и рекомендации прямыми запросами для скорости
         db.query(WorkoutDetail).filter(WorkoutDetail.session_id == session_id).delete()
         db.query(AIRecommendation).filter(AIRecommendation.session_id == session_id).delete()
 
-        # Добавляем новые детали
         for exercise in exercises:
             sets_count = len(exercise.reps)
             reps_count = max(exercise.reps) if exercise.reps else 0
@@ -194,5 +183,40 @@ async def update_workout_session(session_id: int, exercises: list, notes: str = 
     except Exception as e:
         db.rollback()
         raise e
+    finally:
+        db.close()
+
+
+async def save_ai_recommendation(
+    telegram_id: int,
+    advice_text: str,
+    context_info: str = None,
+    session_id: int = None
+) -> AIRecommendation:
+    """Сохраняет рекомендацию в БД и возвращает объект с ID."""
+    db = get_session_sync()
+    try:
+        rec = AIRecommendation(
+            session_id=session_id,
+            advice_text=advice_text,
+            is_read=False,
+            context_info=context_info
+        )
+        db.add(rec)
+        db.commit()
+        db.refresh(rec)
+        return rec
+    finally:
+        db.close()
+
+
+async def update_recommendation_status(recommendation_id: int, is_accepted: bool):
+    """Обновляет статус рекомендации (Принято/Отказано)."""
+    db = get_session_sync()
+    try:
+        rec = db.query(AIRecommendation).filter(AIRecommendation.recommendation_id == recommendation_id).first()
+        if rec:
+            rec.is_read = is_accepted
+            db.commit()
     finally:
         db.close()

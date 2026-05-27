@@ -10,57 +10,42 @@ from sqlalchemy import and_, func, select
 from database.connection import get_session_sync
 from database.models import WorkoutDetail, WorkoutSession
 
-# Упражнения с собственным весом (weight=0 в БД)
 BODYWEIGHT_EXERCISES = {
     "отжимания", "подтягивания", "пресс", "брусья",
     "скручивания", "приседания", "выпады", "планка"
 }
 
-# Маппинг падежных форм для популярных упражнений
 CASE_NORMALIZATION = {
-    # Приседания
     "приседаний": "приседания", "приседаниям": "приседания",
     "приседаниями": "приседания", "приседаниях": "приседания",
     "приседание": "приседания", "приседанием": "приседания",
-    # Отжимания
     "отжиманий": "отжимания", "отжиманиям": "отжимания",
     "отжиманиями": "отжимания", "отжиманиях": "отжимания",
     "отжимание": "отжимания", "отжиманием": "отжимания",
-    # Подтягивания
     "подтягиваний": "подтягивания", "подтягиваниям": "подтягивания",
     "подтягиваниями": "подтягивания", "подтягиваниях": "подтягивания",
     "подтягивание": "подтягивания", "подтягиванием": "подтягивания",
-    # Жим
-    "жиме": "жим", "жимом": "жим", "жима": "жим", "жиму": "жим", "жимом": "жим",
-    # Тяга
+    "жиме": "жим", "жимом": "жим", "жима": "жим", "жиму": "жим",
     "тяге": "тяга", "тягой": "тяга", "тяги": "тяга", "тягу": "тяга", "тягах": "тяга",
-    # Становая тяга
     "становой тяге": "становая тяга", "становой тягой": "становая тяга",
-    # Брусья
     "брусьях": "брусья", "брусьями": "брусья", "брусьев": "брусья",
-    # Пресс
     "прессе": "пресс", "прессом": "пресс", "пресса": "пресс",
 }
 
-def normalize_exercise_name(name: str) -> str:
-    """Нормализует название упражнения: убирает падежи, приводит к нижнему регистру."""
-    name = name.lower().strip().replace("ё", "е")
 
-    # Сначала пробуем точное совпадение в маппинге падежей
+def normalize_exercise_name(name: str) -> str:
+    name = name.lower().strip().replace("ё", "е")
     if name in CASE_NORMALIZATION:
         return CASE_NORMALIZATION[name]
-
-    # Пробуем убрать окончания -ий, -ей, -ям, -ях, -ами, -ем, -ом
     for ending in ["ий", "ей", "ям", "ях", "ами", "ем", "ом", "ах", "ам"]:
         if name.endswith(ending) and len(name) > len(ending) + 1:
             base = name[:-len(ending)]
-            # Пробуем добавить "а" или "я" для множественного числа
             for suffix in ["а", "я", "ы", "и", ""]:
                 variant = base + suffix
                 if variant in BODYWEIGHT_EXERCISES or variant in CASE_NORMALIZATION.values():
                     return variant
-
     return name
+
 
 def get_workout_history(
     telegram_id: int,
@@ -76,7 +61,6 @@ def get_workout_history(
 
         normalized = normalize_exercise_name(exercise_name)
 
-        # Если даты не указаны явно, берём первую и последнюю запись этого упражнения из БД
         if start_date is None and end_date is None:
             min_max_query = (
                 select(
@@ -97,13 +81,11 @@ def get_workout_history(
                 query_start = min_max_result.min_date
                 query_end = min_max_result.max_date
             else:
-                # Данных нет
                 return []
         elif start_date is not None and end_date is not None:
             query_start = start_date
             query_end = end_date
         else:
-            # Если указана только одна дата, используем fallback
             query_end = datetime.now().date()
             query_start = query_end - timedelta(days=days)
 
@@ -114,10 +96,7 @@ def get_workout_history(
                 WorkoutDetail.sets_count,
                 WorkoutDetail.reps_count
             )
-            .join(
-                WorkoutDetail,
-                WorkoutDetail.session_id == WorkoutSession.session_id
-            )
+            .join(WorkoutDetail, WorkoutDetail.session_id == WorkoutSession.session_id)
             .where(
                 and_(
                     WorkoutSession.telegram_id == telegram_id,
@@ -135,7 +114,6 @@ def get_workout_history(
             if date_key not in grouped:
                 grouped[date_key] = 0
 
-            # Если вес = 0 или упражнение в списке bodyweight, считаем повторения
             if normalized in BODYWEIGHT_EXERCISES or float(row.weight) == 0:
                 total = row.sets_count * row.reps_count
             else:
@@ -147,12 +125,18 @@ def get_workout_history(
     finally:
         session.close()
 
+
 def render_exercise_chart(
     history_data: List[Tuple[datetime, float]],
     exercise_name: str
 ):
+    """
+    Рисует график ТОЛЬКО по дням тренировок (без пропусков календарных дней).
+    """
     fig, ax = plt.subplots(figsize=(10, 5))
-    dates = [x[0] for x in history_data]
+
+    # Преобразуем даты в строки для категориальной оси X
+    dates_str = [x[0].strftime('%d.%m') for x in history_data]
     values = [x[1] for x in history_data]
 
     if values:
@@ -162,16 +146,20 @@ def render_exercise_chart(
         y_max = max_val + 5
         ax.set_ylim(y_min, y_max)
 
-    ax.plot(dates, values, marker="o", linewidth=3)
+    # Используем range(len) для X, чтобы не было "пустых" дней между тренировками
+    ax.plot(range(len(dates_str)), values, marker="o", linewidth=3, color="#2E86AB")
+
+    # Настраиваем метки X только по дням тренировок
+    ax.set_xticks(range(len(dates_str)))
+    ax.set_xticklabels(dates_str, rotation=45, ha='right')
 
     normalized = normalize_exercise_name(exercise_name)
     ylabel = "Количество повторений" if normalized in BODYWEIGHT_EXERCISES else "Тренировочный объем"
 
-    ax.set_title(f"Прогресс: {exercise_name}")
-    ax.set_xlabel("Дата")
+    ax.set_title(f"Прогресс: {exercise_name}", fontsize=14, fontweight='bold')
+    ax.set_xlabel("Дата тренировки")
     ax.set_ylabel(ylabel)
-    ax.grid(True)
-    plt.xticks(rotation=45)
+    ax.grid(True, alpha=0.3)
     plt.tight_layout()
 
     buffer = io.BytesIO()

@@ -2,11 +2,9 @@
 Модели SQLAlchemy для базы данных спортивного дневника.
 Полностью совместимы с вашей текущей PostgreSQL схемой.
 """
-
 from datetime import datetime, date
 from decimal import Decimal
 from typing import List, Optional
-
 from sqlalchemy import (
     BigInteger,
     Boolean,
@@ -18,7 +16,6 @@ from sqlalchemy import (
     String,
     Text,
 )
-
 from sqlalchemy.orm import (
     DeclarativeBase,
     Mapped,
@@ -32,7 +29,6 @@ class Base(DeclarativeBase):
 
 
 class User(Base):
-
     __tablename__ = "users"
 
     telegram_id: Mapped[int] = mapped_column(
@@ -40,12 +36,10 @@ class User(Base):
         primary_key=True,
         autoincrement=False
     )
-
     username: Mapped[Optional[str]] = mapped_column(
         String,
         nullable=True
     )
-
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         nullable=False
@@ -61,32 +55,26 @@ class User(Base):
         return f"<User telegram_id={self.telegram_id}>"
 
 
-
 class WorkoutSession(Base):
-
     __tablename__ = "workout_sessions"
 
     session_id: Mapped[int] = mapped_column(
         Integer,
         primary_key=True
     )
-
     telegram_id: Mapped[int] = mapped_column(
         BigInteger,
         ForeignKey("users.telegram_id"),
         nullable=False
     )
-
     session_date: Mapped[date] = mapped_column(
         Date,
         nullable=False
     )
-
     user_notes: Mapped[Optional[str]] = mapped_column(
         Text,
         nullable=True
     )
-
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         nullable=False
@@ -96,13 +84,11 @@ class WorkoutSession(Base):
         "User",
         back_populates="workout_sessions"
     )
-
     workout_details: Mapped[List["WorkoutDetail"]] = relationship(
         "WorkoutDetail",
         back_populates="session",
         cascade="all, delete-orphan"
     )
-
     ai_recommendations: Mapped[List["AIRecommendation"]] = relationship(
         "AIRecommendation",
         back_populates="session",
@@ -113,41 +99,31 @@ class WorkoutSession(Base):
         return f"<WorkoutSession session_id={self.session_id}>"
 
 
-
 class WorkoutDetail(Base):
-
     __tablename__ = "workout_details"
 
     detail_id: Mapped[int] = mapped_column(
         Integer,
         primary_key=True
     )
-
     session_id: Mapped[int] = mapped_column(
         Integer,
         ForeignKey("workout_sessions.session_id"),
         nullable=False
     )
-
     exercise_name: Mapped[str] = mapped_column(
         String,
         nullable=False
     )
-
-    # Для упражнений с собственным весом weight=0
     weight: Mapped[Decimal] = mapped_column(
         Numeric(10, 2),
         nullable=False,
         default=0
     )
-
-    # ВАЖНО:
-    # Полностью соответствует вашей БД
     sets_count: Mapped[int] = mapped_column(
         Integer,
         nullable=False
     )
-
     reps_count: Mapped[int] = mapped_column(
         Integer,
         nullable=False
@@ -167,34 +143,33 @@ class WorkoutDetail(Base):
         )
 
 
-
 class AIRecommendation(Base):
-
     __tablename__ = "ai_recommendations"
 
     recommendation_id: Mapped[int] = mapped_column(
         Integer,
         primary_key=True
     )
-
-    session_id: Mapped[int] = mapped_column(
+    session_id: Mapped[Optional[int]] = mapped_column(
         Integer,
         ForeignKey("workout_sessions.session_id"),
-        nullable=False
+        nullable=True  # NULL для рекомендаций за период
     )
-
     advice_text: Mapped[str] = mapped_column(
         Text,
         nullable=False
     )
-
     is_read: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
         default=False
     )
+    context_info: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True
+    )
 
-    session: Mapped["WorkoutSession"] = relationship(
+    session: Mapped[Optional["WorkoutSession"]] = relationship(
         "WorkoutSession",
         back_populates="ai_recommendations"
     )
